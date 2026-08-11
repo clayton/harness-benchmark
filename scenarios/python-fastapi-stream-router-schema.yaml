@@ -1,0 +1,78 @@
+id: python-fastapi-stream-router-schema
+type: bugfix
+title: "FastAPI: stream item types lost when mounting via include_router()"
+description: >
+  Typed SSE/JSONL streaming routes work at runtime, but when registered through
+  APIRouter + include_router(), the OpenAPI schema drops stream item type
+  information (itemSchema content/media type or $ref). Harder multi-file
+  routing/schema task with clear regression tests.
+language: python
+tags: [python, fastapi, openapi, sse, streaming, hard, multi-file]
+contamination_risk: high
+difficulty: hard
+source: "https://github.com/fastapi/fastapi/pull/15077 (discussion #15066)"
+
+repo:
+  url: "https://github.com/fastapi/fastapi.git"
+  base_ref: "98b12fe56f97107e71a20fc1cf334ccfa590efb5"
+  gold_ref: "ad03e117c0010a563067740c97cb7ab011cb5174"
+
+prompt: |
+  You are working in the FastAPI repository (checked out at the provided base commit).
+
+  Bug:
+  When a **typed** SSE or JSONL streaming endpoint is registered on an `APIRouter`
+  and then mounted with `app.include_router(...)`, the generated **OpenAPI schema
+  loses the stream item type information**.
+
+  Observed symptoms (OpenAPI only — runtime streaming still works):
+  - For SSE: `itemSchema` ends up without the expected content schema / content
+    media type details for the stream items.
+  - For JSONL: the stream `itemSchema` can collapse to an empty object instead of
+    the declared item model/`$ref`.
+
+  The same endpoints, when registered directly on the app (not via a nested
+  router + `include_router`), produce the correct OpenAPI.
+
+  Requirements:
+  - Fix the framework so stream item typing is preserved when routes are
+    included through routers.
+  - Keep runtime streaming behavior correct.
+  - Add or update unit/regression tests that assert OpenAPI (and related)
+    behavior for typed streams on routers.
+  - Keep the change focused; do not refactor unrelated routing code.
+
+  Work only in this repository checkout. Do not ask questions; implement and
+  verify with tests.
+
+acceptance:
+  setup_commands:
+    - "python3 -m venv .venv"
+    - '. .venv/bin/activate && pip install -e ".[standard]" httpx2 pytest pytest-timeout'
+  test_commands:
+    - ". .venv/bin/activate && python -m pytest tests/test_sse.py tests/test_stream_bare_type.py -q --tb=short"
+  build_commands: []
+  fail_to_pass:
+    - "tests/test_sse.py::test_sse_router_typed_openapi_schema"
+    - "tests/test_sse.py::test_default_response_class_on_app_openapi_schema"
+    - "tests/test_sse.py::test_default_response_class_on_parent_router_openapi_schema"
+    - "tests/test_stream_bare_type.py::test_jsonl_router_typed_stream"
+    - "tests/test_stream_bare_type.py::test_jsonl_router_typed_openapi_schema"
+  must_pass_existing_tests: true
+  notes: >
+    SMOKE VERIFIED 2026-08-11.
+    Base: existing sse/stream tests pass (26). Gold test files overlaid on base:
+    5 failures (FAIL_TO_PASS). Gold ref: 34 passed on those two files.
+    Requires httpx2 + pytest-timeout (pyproject declares timeout option).
+
+allowed_paths:
+  - "fastapi/routing.py"
+  - "tests/test_sse.py"
+  - "tests/test_stream_bare_type.py"
+
+metadata:
+  pr: 15077
+  discussion: 15066
+  upstream_title: "Fix stream item type lost when using include_router()"
+  smoke_status: ok
+  workspace: workspaces/fastapi

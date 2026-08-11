@@ -1,0 +1,73 @@
+id: python-pytest-approx-inf-rel
+type: bugfix
+title: "pytest: reject infinite relative tolerance for timedelta approx"
+description: >
+  pytest.approx() multiplies a timedelta by the relative tolerance. When
+  rel=float("inf"), that multiplication raises OverflowError. The fix should
+  reject infinite relative tolerances with a clear ValueError (like other
+  invalid rel values), without changing normal numeric approx behavior.
+language: python
+tags: [python, pytest, approx, timedelta, easy, smoke-ok]
+contamination_risk: high
+difficulty: easy
+source: "https://github.com/pytest-dev/pytest/pull/14754"
+
+repo:
+  url: "https://github.com/pytest-dev/pytest.git"
+  base_ref: "1d5c40392ea42db38582b096f639eb762a5527c8"
+  gold_ref: "224e9ef86758841a716c43a2bc711e1f56934528"
+
+prompt: |
+  You are working in the pytest repository (checked out at the provided base commit).
+
+  Bug:
+  `pytest.approx()` supports approximate comparison for `datetime.timedelta` values.
+  When constructing the comparison it multiplies a timedelta by the relative
+  tolerance (`rel`). If a caller passes `rel=float("inf")`, Python raises
+  `OverflowError` because timedelta has no infinite representation.
+
+  Expected behavior:
+  - Infinite relative tolerances should be rejected with a clear `ValueError`
+    (similar to how negative / NaN relative tolerances are already rejected),
+    before any timedelta multiplication that would overflow.
+  - Normal approximate comparison behavior for numbers and timedeltas with finite
+    tolerances must remain unchanged.
+
+  Requirements:
+  - Implement the fix in the appropriate source file(s).
+  - Add or update unit tests covering the infinite-`rel` timedelta case.
+  - Keep the change minimal; do not refactor unrelated code.
+  - Do not look up or copy the upstream fix from the internet if you can avoid it;
+    solve from this description and the local code.
+
+acceptance:
+  setup_commands:
+    - 'python3 -m venv .venv'
+    - '. .venv/bin/activate && export SETUPTOOLS_SCM_PRETEND_VERSION=9.1.0 && pip install -e ".[dev]"'
+  test_commands:
+    - '. .venv/bin/activate && python -m pytest testing/python/approx.py -q --tb=short'
+  build_commands: []
+  fail_to_pass:
+    - "testing/python/approx.py::TestApproxDatetime::test_timedelta_rel_must_not_be_infinite"
+  must_pass_existing_tests: true
+  notes: >
+    SMOKE VERIFIED 2026-08-11.
+    setuptools-scm may report 0.1.dev* without SETUPTOOLS_SCM_PRETEND_VERSION=9.1.0,
+    which breaks minversion checks. Use optional-dependencies.dev (not [testing]).
+    At base_ref, existing approx tests pass (135); bug is OverflowError on
+    approx(timedelta(seconds=1), rel=float("inf")). Gold regression test is only
+    in gold_ref — FAIL_TO_PASS when gold test is applied to base code.
+
+allowed_paths:
+  - "src/_pytest/approx.py"
+  - "testing/python/approx.py"
+  - "changelog/"
+
+metadata:
+  pr: 14754
+  upstream_title: "fix: handle infinite relative tolerance for timedelta values"
+  smoke_status: ok
+  workspace: workspaces/pytest
+  primary_files:
+    - src/_pytest/approx.py
+    - testing/python/approx.py

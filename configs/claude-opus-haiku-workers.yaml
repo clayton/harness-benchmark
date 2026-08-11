@@ -1,0 +1,18 @@
+id: claude-opus-haiku-workers
+name: Claude Code · Opus orchestrator + Haiku workers
+harness: claude_code
+harness_version: "2.1.220"
+model: claude-opus-4
+workflow: orchestrator_subagents
+tools: [shell, edit, search, subagents]
+skills: []
+comparison_mode: controlled
+notes: >
+  Example multi-model workflow. Pin from `claude --version` (2026-08-11).
+  Compare against a pure-Opus baseline (same harness@version and budget).
+budget:
+  max_minutes: 45
+  max_usd: 5.0
+harness_options:
+  orchestrator_model: claude-opus-4
+  worker_model: claude-haiku

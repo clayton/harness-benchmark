@@ -1,0 +1,16 @@
+id: grok-baseline
+name: Grok harness · single agent · baseline workflow
+harness: grok
+harness_version: "1.0.0 (3cd0d0cbcebe)"
+model: grok-4.5
+workflow: baseline
+tools: [shell, edit, search]
+skills: []
+comparison_mode: controlled
+notes: >
+  Control for Grok experiments. Pin from `grok --version` on this machine (2026-08-11).
+  Re-pin when the CLI updates. Same harness@version + model as other Grok configs;
+  only the workflow axis should change when comparing.
+budget:
+  max_minutes: 45
+  max_turns: 80

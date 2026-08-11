@@ -1,0 +1,70 @@
+id: ruby-rails-length-validator-nil-proc
+type: bugfix
+title: "Rails ActiveModel: LengthValidator crash with nil + proc minimum"
+description: >
+  LengthValidator raises NoMethodError when :minimum/:is is a proc and the
+  validated value is nil, because the proc is resolved only inside a present-
+  value branch while :count still uses the unresolved proc later.
+language: ruby
+tags: [ruby, rails, activemodel, validations, medium]
+contamination_risk: high
+difficulty: medium
+source: "https://github.com/rails/rails/pull/58428 (fixes #40642)"
+
+repo:
+  url: "https://github.com/rails/rails.git"
+  base_ref: "46347d148cda6b8a4bcf6793a66bc71f3614ecfa"
+  gold_ref: "e1375057e1a0765178e6ac9cf2820503c25d2f27"
+
+prompt: |
+  You are working in the Rails monorepo (checked out at the provided base commit).
+  Focus on ActiveModel validations — you do not need to change unrelated frameworks.
+
+  Bug:
+  `LengthValidator` raises `NoMethodError` when a `:minimum` (or `:is`) length
+  constraint is given as a **proc** and the validated attribute value is `nil`.
+
+  Example shape of the failure:
+
+    class Foo
+      include ActiveModel::Validations
+      validates :bar, length: { minimum: ->(record) { record.one + 2 } }
+      def one = 1
+      def bar = nil
+    end
+
+    Foo.new.valid?
+    # => NoMethodError (unexpected receiver / wrong object while evaluating the proc)
+
+  Expected behavior:
+  - Validating a `nil` value with a proc-based `:minimum` / `:is` should not crash.
+  - It should behave consistently with length validation rules for blank/nil values
+    (report the appropriate validation error or skip according to existing
+    LengthValidator semantics — the important part is: **no exception**).
+  - Proc-based limits should still work correctly when the value is present.
+
+  Requirements:
+  - Fix the validator implementation.
+  - Add a regression test in the ActiveModel length validation tests.
+  - Keep the change minimal and localized to ActiveModel validations.
+
+acceptance:
+  must_pass_existing_tests: true
+  test_commands:
+    - "cd activemodel && bundle exec ruby -Itest test/cases/validations/length_validation_test.rb"
+  build_commands: []
+  notes: >
+    Full Rails setup is heavy. Prefer bundling/running only the ActiveModel
+    component tests if the monorepo supports it. If local Rails test bootstrap
+    is painful, treat this scenario as medium effort for environment setup.
+
+allowed_paths:
+  - "activemodel/lib/active_model/validations/length.rb"
+  - "activemodel/test/cases/validations/length_validation_test.rb"
+  - "activemodel/CHANGELOG.md"
+
+metadata:
+  pr: 58428
+  issue: 40642
+  upstream_title: "Fix LengthValidator crash with proc minimum and nil value"
+  monorepo: true

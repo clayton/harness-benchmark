@@ -1,0 +1,21 @@
+# Incomplete hard task × (baseline unattended | superpowers unattended | superpowers+proxy)
+id: skills-superpowers-proxy-incomplete
+name: "Superpowers + stakeholder proxy on underspecified FastAPI stream bug"
+hypothesis: >
+  On an incomplete prompt, unattended Superpowers may thrash or under-specify
+  tests; Superpowers + proxy can recover quality via Q&A. Baseline unattended
+  may fail more often without full diagnosis. Expect proxy total cost (SUT+proxy)
+  between pure baseline and thrashing Superpowers.
+scenario_ids:
+  - python-fastapi-stream-router-incomplete
+config_ids:
+  - pi-grok45-baseline
+  - pi-grok45-superpowers
+  - pi-grok45-superpowers-proxy
+repeats: 1
+notes: >
+  Requires scenario.stakeholder_brief (present).
+  Proxy answers STAKEHOLDER_QUESTION from brief; never gets gold patch.
+
+  hb experiment --from experiments/skills-superpowers-proxy-incomplete.yaml
+  hb execute <run_id> --timeout 2400

@@ -1,0 +1,95 @@
+id: python-fastapi-stream-router-incomplete
+type: bugfix
+title: "FastAPI: OpenAPI wrong for nested streaming routes (underspecified)"
+description: >
+  Incomplete-prompt variant of the include_router stream-schema bug. The SUT
+  sees symptoms only; stakeholder_brief holds richer acceptance detail for
+  human/proxy modes. Same gold_ref/tests as the complete hard scenario.
+language: python
+tags: [python, fastapi, openapi, sse, streaming, hard, incomplete, multi-file]
+contamination_risk: high
+difficulty: hard
+source: "https://github.com/fastapi/fastapi/pull/15077 (discussion #15066)"
+
+repo:
+  url: "https://github.com/fastapi/fastapi.git"
+  base_ref: "98b12fe56f97107e71a20fc1cf334ccfa590efb5"
+  gold_ref: "ad03e117c0010a563067740c97cb7ab011cb5174"
+
+# Intentionally incomplete — symptoms + goal, little diagnosis
+prompt: |
+  You are working in the FastAPI repository (checked out at the provided base commit).
+
+  Users report that some streaming endpoints show incorrect OpenAPI documentation
+  when the app is assembled from routers. Runtime behavior of the streams is fine;
+  only the generated schema is wrong for certain nested setups.
+
+  Goal:
+  - Make OpenAPI documentation for typed streaming endpoints correct when those
+    endpoints live on routers that are included into a parent app/router.
+  - Keep streaming at runtime working.
+  - Add regression tests.
+
+  If you need product/maintainer clarification about expected schema shape or
+  which cases matter, use the stakeholder question protocol when available.
+
+  Work only in this repository checkout.
+
+stakeholder_brief: |
+  PRIVILEGED — for human/proxy only. Do not paste into the SUT prompt.
+
+  ## Background
+  Typed SSE and JSONL streaming routes declare stream item models. When a route
+  is registered directly on FastAPI(), OpenAPI includes the item type. When the
+  same route is first put on APIRouter and then app.include_router(...), OpenAPI
+  loses stream item type information (SSE itemSchema missing content details;
+  JSONL itemSchema becomes {}).
+
+  Runtime streaming still works — this is a schema/include_router wiring bug.
+
+  ## Expected behavior
+  - OpenAPI for router-mounted typed SSE streams must include the stream item
+    content schema / media type details (not a bare generic event object only).
+  - OpenAPI for router-mounted typed JSONL streams must reference the item model
+    (e.g. $ref to components/schemas/Item), not {}.
+  - Default response class inheritance on app vs parent router should still produce
+    correct OpenAPI for streaming routes after include_router.
+
+  ## Out of scope
+  - Do not redesign the entire OpenAPI system.
+  - Do not change unrelated routing features.
+  - Do not provide the coding agent with a line-by-line patch.
+
+  ## Verification
+  tests/test_sse.py and tests/test_stream_bare_type.py must pass, including
+  router-typed OpenAPI cases (FAIL_TO_PASS listed in acceptance).
+
+  ## Discussion
+  https://github.com/fastapi/fastapi/discussions/15066
+
+acceptance:
+  setup_commands:
+    - "python3 -m venv .venv"
+    - '. .venv/bin/activate && pip install -e ".[standard]" httpx2 pytest pytest-timeout'
+  test_commands:
+    - ". .venv/bin/activate && python -m pytest tests/test_sse.py tests/test_stream_bare_type.py -q --tb=short"
+  fail_to_pass:
+    - "tests/test_sse.py::test_sse_router_typed_openapi_schema"
+    - "tests/test_sse.py::test_default_response_class_on_app_openapi_schema"
+    - "tests/test_sse.py::test_default_response_class_on_parent_router_openapi_schema"
+    - "tests/test_stream_bare_type.py::test_jsonl_router_typed_stream"
+    - "tests/test_stream_bare_type.py::test_jsonl_router_typed_openapi_schema"
+  must_pass_existing_tests: true
+  notes: >
+    Same oracle as python-fastapi-stream-router-schema. Incomplete prompt + brief
+    is for interaction=proxy|human experiments.
+
+allowed_paths:
+  - "fastapi/routing.py"
+  - "tests/test_sse.py"
+  - "tests/test_stream_bare_type.py"
+
+metadata:
+  pr: 15077
+  incomplete_prompt: true
+  complete_sibling: python-fastapi-stream-router-schema

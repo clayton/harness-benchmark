@@ -1,0 +1,19 @@
+# Superpowers + proxy only (skip re-running baseline — already measured unattended).
+id: skills-superpowers-proxy-only
+name: "Superpowers + Haiku proxy (incomplete FastAPI)"
+hypothesis: >
+  With an underspecified prompt, Superpowers + cheap stakeholder proxy can
+  reach a correct fix via Q&A. Compare cost/quality to prior unattended
+  superpowers/baseline runs on the complete hard scenario (different prompt →
+  different fingerprint).
+scenario_ids:
+  - python-fastapi-stream-router-incomplete
+config_ids:
+  - pi-grok45-superpowers-proxy
+repeats: 1
+notes: >
+  Dedup: re-running this experiment file will skip if combo already completed
+  unless --force. Proxy model is Haiku to avoid doubling Grok 4.5 cost on Q&A.
+
+  hb experiment --from experiments/skills-superpowers-proxy-only.yaml
+  hb execute <run_id> --timeout 2400

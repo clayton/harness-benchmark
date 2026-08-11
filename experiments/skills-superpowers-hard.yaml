@@ -1,0 +1,20 @@
+# Superpowers vs baseline on a harder FastAPI multi-file bugfix.
+id: skills-superpowers-hard
+name: "Skills A/B hard — superpowers vs baseline (FastAPI stream router schema)"
+hypothesis: >
+  On a harder multi-file OpenAPI/routing bug, obra/superpowers may improve
+  quality (or time-to-correct-fix) vs clean pi baseline at higher cost.
+  If both still pass equally, Superpowers is paying overhead without quality lift
+  even on harder tasks under unattended mode.
+scenario_ids:
+  - python-fastapi-stream-router-schema
+config_ids:
+  - pi-grok45-baseline
+  - pi-grok45-superpowers
+repeats: 1
+notes: >
+  Harder than commander/chi. Expect longer runs (setup installs FastAPI deps).
+  Superpowers max budget 60m / 120 turns on config; execute with --timeout 1800+.
+
+  hb experiment --from experiments/skills-superpowers-hard.yaml
+  hb execute <run_id> --timeout 2400

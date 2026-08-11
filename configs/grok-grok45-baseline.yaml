@@ -1,0 +1,27 @@
+id: grok-grok45-baseline
+name: Grok harness · Grok 4.5 · baseline (no special workflow)
+harness: grok
+harness_version: "1.0.0 (3cd0d0cbcebe)"
+model: grok-4.5
+workflow: baseline
+tools: [shell, edit, search]
+skills: []
+comparison_mode: controlled
+notes: >
+  Pair with pi-grok45-baseline. Same logical model (Grok 4.5), same baseline
+  workflow, different harness (Grok Build CLI). Pin from `grok --version`
+  (2026-08-11). Uses native grok.com path (not OpenRouter).
+budget:
+  max_minutes: 45
+  max_turns: 80
+harness_options:
+  model_id: grok-4.5
+  # Run from the prepared workspace directory:
+  # Interactive (recommended):
+  #   grok -m grok-4.5 --always-approve --max-turns 80 --verbatim "$(cat HB_PROMPT.txt)"
+  # Or open TUI and paste HB_PROMPT.txt
+  launch_interactive: >-
+    grok -m grok-4.5 --always-approve --max-turns 80 --cwd . --verbatim "$(cat HB_PROMPT.txt)"
+  # json output includes usage + total_cost_usd for hb finish telemetry
+  launch_headless: >-
+    grok -m grok-4.5 --always-approve --max-turns 80 --output-format json --permission-mode bypassPermissions --prompt-file HB_PROMPT.txt

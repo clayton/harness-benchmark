@@ -1,0 +1,30 @@
+# First controlled experiment: same model, same problem, different harness.
+id: harness-pi-vs-grok-model45
+name: "Harness A/B — pi vs Grok CLI (both Grok 4.5, baseline workflow)"
+hypothesis: >
+  Holding model (Grok 4.5) and workflow (baseline) fixed, does the Grok Build
+  harness produce better quality-per-cost than pi (or vice versa) on the same
+  bugfix scenarios?
+scenario_ids:
+  - js-commander-negative-exp-E   # start here (fastest smoke path)
+  # Uncomment after first pair works:
+  # - go-chi-tee-bytes-double-count
+  # - python-pytest-approx-inf-rel
+config_ids:
+  - pi-grok45-baseline
+  - grok-grok45-baseline
+repeats: 1
+# Optional: requested sampling seed recorded on each run snapshot.
+# Most agent CLIs (pi/grok today) do not expose seed — still useful provenance.
+# seed: 42
+notes: >
+  Fair comparison notes:
+  - Lock model + workflow; only harness differs.
+  - pi routes via OpenRouter x-ai/grok-4.5; Grok CLI uses grok.com — document if
+    outcomes diverge in a way that smells like routing not harness.
+  - Each run freezes results/<id>/snapshot.json (scenario+config+refs+seed).
+  - Re-create the same setup later: hb rerun <run_id> && hb execute <new_id>
+
+  Launch:
+    hb experiment --from experiments/harness-pi-vs-grok-model45.yaml
+    hb execute <run_id>

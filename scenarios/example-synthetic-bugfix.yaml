@@ -1,0 +1,50 @@
+# Synthetic example for tooling only — not a real benchmark claim.
+# Replace with curated OSS scenarios once the pipeline is proven.
+
+id: example-synthetic-bugfix
+type: bugfix
+title: "Example: fix off-by-one in clamp helper"
+description: >
+  Synthetic scenario that documents the expected YAML shape. The repo URL is a
+  placeholder; do not treat results on this scenario as meaningful.
+language: python
+tags: [example, synthetic, bugfix]
+contamination_risk: low
+difficulty: easy
+source: "synthetic://harness-benchmark/example"
+
+repo:
+  url: "https://github.com/example/harness-benchmark-fixtures.git"
+  base_ref: "v0.1.0-broken"
+  gold_ref: "v0.1.0-fixed"
+
+prompt: |
+  You are working in a small Python utility library.
+
+  Bug:
+  The function `clamp(value, low, high)` is supposed to return `value` limited
+  to the inclusive range [low, high]. Currently, values equal to `high` are
+  incorrectly rejected / mishandled (off-by-one style bug).
+
+  Requirements:
+  - Fix `clamp` so inclusive bounds work correctly.
+  - Do not change the public API signature.
+  - Add or update unit tests if needed.
+  - Keep the change minimal.
+
+  Do not refactor unrelated code.
+
+acceptance:
+  must_pass_existing_tests: true
+  test_commands:
+    - "python -m pytest tests/test_clamp.py -q"
+  build_commands: []
+  notes: "Placeholder commands until a real fixture repo exists."
+
+allowed_paths:
+  - "src/"
+  - "tests/"
+
+metadata:
+  synthetic: true
+  purpose: "schema + CLI smoke test"

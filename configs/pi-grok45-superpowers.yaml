@@ -1,0 +1,54 @@
+id: pi-grok45-superpowers
+name: pi · Grok 4.5 · obra/superpowers skills ON
+harness: pi
+harness_version: "0.84.1"
+model: grok-4.5
+model_version: "openrouter/x-ai/grok-4.5"
+workflow: baseline
+interaction: unattended
+tools: [read, bash, edit, write]
+skills:
+  - using-superpowers
+  - brainstorming
+  - systematic-debugging
+  - writing-plans
+  - executing-plans
+  - test-driven-development
+  - verification-before-completion
+  - subagent-driven-development
+  - requesting-code-review
+  - dispatching-parallel-agents
+  - using-git-worktrees
+  - finishing-a-development-branch
+  - receiving-code-review
+  - writing-skills
+comparison_mode: controlled
+notes: >
+  Treatment: same pi@0.84.1 + Grok 4.5 as baseline, but load obra/superpowers
+  (pinned checkout under vendor/superpowers). Pair with pi-grok45-baseline.
+  Superpowers is a full methodology (brainstorm → plan → TDD); unattended mode
+  still forbids asking the user questions so headless runs can finish.
+  Pin SHA in harness_options.superpowers_sha when updating vendor/superpowers.
+budget:
+  max_minutes: 60
+  max_turns: 120
+harness_options:
+  provider: openrouter
+  model_id: x-ai/grok-4.5
+  superpowers_repo: "https://github.com/obra/superpowers"
+  superpowers_sha: "44c9b2d6e889982ac18c27d05a19fefe335194e1"
+  superpowers_path: "vendor/superpowers"
+  # -e path relative to repo root is expanded by shell from cwd=workspace —
+  # use absolute path in launch strings below.
+  launch_interactive: >-
+    pi --provider openrouter --model x-ai/grok-4.5 --approve
+    -e /Users/clayton/Tools/harness-benchmark/vendor/superpowers/.pi/extensions/superpowers.ts
+    --skill /Users/clayton/Tools/harness-benchmark/vendor/superpowers/skills
+    --append-system-prompt "UNATTENDED BENCHMARK MODE: Do not ask the user any questions. The task is fully specified in the user message. Prefer Superpowers skills (TDD, systematic debugging, verification) but do not block on human approval. Work only in the current working directory. Do not create git worktrees outside this directory. Implement the fix and tests, verify, then stop."
+    @HB_PROMPT.txt
+  launch_headless: >-
+    pi -p --mode json --provider openrouter --model x-ai/grok-4.5 --approve --no-session
+    -e /Users/clayton/Tools/harness-benchmark/vendor/superpowers/.pi/extensions/superpowers.ts
+    --skill /Users/clayton/Tools/harness-benchmark/vendor/superpowers/skills
+    --append-system-prompt "UNATTENDED BENCHMARK MODE: Do not ask the user any questions. The task is fully specified in the user message. Prefer Superpowers skills (TDD, systematic debugging, verification) but do not block on human approval. Work only in the current working directory. Do not create git worktrees outside this directory. Implement the fix and tests, verify, then stop."
+    "$(cat HB_PROMPT.txt)"

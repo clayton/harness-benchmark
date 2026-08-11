@@ -1,0 +1,17 @@
+id: baseline-manual
+name: Baseline (manual harness)
+harness: manual
+model: null
+workflow: baseline
+tools: []
+skills: []
+comparison_mode: controlled
+notes: >
+  Human runs any harness with a plain "implement this" prompt only — no plan
+  mode, no special skills, no orchestrator. Used as control and for early
+  pipeline testing via `hb ingest`.
+budget:
+  max_minutes: 30
+  max_tokens: null
+  max_turns: null
+  max_usd: null

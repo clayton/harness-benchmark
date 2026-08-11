@@ -1,0 +1,15 @@
+id: codex-baseline
+name: Codex CLI · single agent · baseline
+harness: codex
+harness_version: "0.147.0"
+model: null
+workflow: baseline
+tools: [shell, edit, search]
+skills: []
+comparison_mode: controlled
+notes: >
+  Control for Codex experiments. Pin from `codex --version` (2026-08-11).
+  Set model when you pin the exact model used in a real run.
+budget:
+  max_minutes: 45
+  max_turns: 80

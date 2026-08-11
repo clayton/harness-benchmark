@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.tox/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Agent / local session notes (not part of the public project)
+.claude/
+.grok/
+.cursor/
+
+# Local run artifacts (keep directory via .gitkeep; ignore contents)
+results/*/
+!results/.gitkeep
+reports/*
+!reports/.gitkeep
+
+# Cloned scenario workspaces (large; re-fetch via scripts / hb prepare)
+workspaces/
+
+# Vendored experiment deps (large clones; see vendor/README.md)
+vendor/superpowers/
+vendor/*/
+!vendor/README.md
+
+# Occasional local dumps
+*.log
+tmp/
+.cache/

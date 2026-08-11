@@ -1,0 +1,40 @@
+id: pi-grok45-superpowers-proxy
+name: pi · Grok 4.5 SUT · superpowers + cheap Haiku proxy
+harness: pi
+harness_version: "0.84.1"
+model: grok-4.5
+model_version: "openrouter/x-ai/grok-4.5"
+workflow: baseline
+interaction: proxy
+stakeholder:
+  # Cheap stakeholder — answers behavior questions only (no coding tools)
+  model: anthropic/claude-haiku-4.5
+  provider: openrouter
+  harness: pi
+  max_qa_rounds: 8
+  temperature: 0.2
+tools: [read, bash, edit, write]
+skills:
+  - using-superpowers
+  - brainstorming
+  - systematic-debugging
+  - writing-plans
+  - test-driven-development
+  - verification-before-completion
+comparison_mode: ecological
+notes: >
+  SUT: pi + Grok 4.5 + superpowers. Proxy: Haiku via OpenRouter (keeps Q&A cheap).
+  Pair against prior unattended superpowers runs for the same scenario when comparing.
+budget:
+  max_minutes: 60
+  max_turns: 120
+harness_options:
+  provider: openrouter
+  model_id: x-ai/grok-4.5
+  superpowers_sha: "44c9b2d6e889982ac18c27d05a19fefe335194e1"
+  launch_headless: >-
+    pi -p --mode json --provider openrouter --model x-ai/grok-4.5 --approve --no-session
+    -e /Users/clayton/Tools/harness-benchmark/vendor/superpowers/.pi/extensions/superpowers.ts
+    --skill /Users/clayton/Tools/harness-benchmark/vendor/superpowers/skills
+    --append-system-prompt "You may ask the stakeholder using STAKEHOLDER_QUESTION / STAKEHOLDER_END. Prefer Superpowers skills. Work only in the current working directory. Do not create git worktrees outside this directory. When done, implement tests and stop."
+    "$(cat HB_PROMPT.txt)"

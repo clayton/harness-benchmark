@@ -1,0 +1,35 @@
+id: pi-grok45-baseline
+name: pi · Grok 4.5 · baseline (no superpowers, no project skills)
+harness: pi
+harness_version: "0.84.1"
+model: grok-4.5
+model_version: "openrouter/x-ai/grok-4.5"
+workflow: baseline
+interaction: unattended
+tools: [read, bash, edit, write]
+skills: []
+comparison_mode: controlled
+notes: >
+  Control for superpowers A/B. Same pi + Grok 4.5 as pi-grok45-superpowers.
+  Explicitly disables pi package/skill discovery so global installs cannot leak in.
+budget:
+  max_minutes: 45
+  max_turns: 80
+harness_options:
+  provider: openrouter
+  model_id: x-ai/grok-4.5
+  # Unattended constraint on both arms for fairness
+  append_system: >-
+    UNATTENDED BENCHMARK MODE: Do not ask the user any questions. The task is
+    fully specified in the user message. Work only in the current working
+    directory. Do not create git worktrees outside this directory. Implement
+    the fix and tests, verify, then stop.
+  launch_interactive: >-
+    pi --provider openrouter --model x-ai/grok-4.5 --approve --no-extensions --no-skills
+    --append-system-prompt "UNATTENDED BENCHMARK MODE: Do not ask the user any questions. The task is fully specified in the user message. Work only in the current working directory. Do not create git worktrees outside this directory. Implement the fix and tests, verify, then stop."
+    @HB_PROMPT.txt
+  launch_headless: >-
+    pi -p --mode json --provider openrouter --model x-ai/grok-4.5 --approve --no-session
+    --no-extensions --no-skills
+    --append-system-prompt "UNATTENDED BENCHMARK MODE: Do not ask the user any questions. The task is fully specified in the user message. Work only in the current working directory. Do not create git worktrees outside this directory. Implement the fix and tests, verify, then stop."
+    "$(cat HB_PROMPT.txt)"

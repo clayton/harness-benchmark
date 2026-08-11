@@ -1,0 +1,18 @@
+id: grok-orchestrator-subagents
+name: Grok harness · orchestrator + sub-agents
+harness: grok
+harness_version: "1.0.0 (3cd0d0cbcebe)"
+model: grok-4.5
+workflow: orchestrator_subagents
+tools: [shell, edit, search, subagents]
+skills: []
+comparison_mode: controlled
+notes: >
+  Pair with grok-baseline. Keep harness@version, model, and budget aligned.
+  Pin from `grok --version` (2026-08-11).
+budget:
+  max_minutes: 45
+  max_turns: 80
+harness_options:
+  use_subagents: true
+  orchestrator_reviews: true

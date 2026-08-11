@@ -1,0 +1,28 @@
+# Skill package A/B: obra/superpowers ON vs OFF
+# Same model, same harness (pi), same scenarios — only Superpowers skills differ.
+id: skills-superpowers-vs-baseline
+name: "Skills A/B — obra/superpowers vs baseline (pi · Grok 4.5)"
+hypothesis: >
+  Holding harness (pi@0.84.1) and model (Grok 4.5) fixed, does loading
+  obra/superpowers improve quality or efficiency vs a clean baseline on
+  real bugfix scenarios? Expect higher token/cost if Superpowers runs full
+  process skills; quality may rise on medium tasks and stay flat on easy ones.
+scenario_ids:
+  - js-commander-negative-exp-E       # easy control (quality likely saturated)
+  - go-chi-tee-bytes-double-count     # medium — better signal
+  # - python-pytest-approx-inf-rel    # enable after first pass
+config_ids:
+  - pi-grok45-baseline
+  - pi-grok45-superpowers
+repeats: 1
+# seed: 42
+notes: >
+  Superpowers pinned at vendor/superpowers @ 44c9b2d6e889982ac18c27d05a19fefe335194e1
+  Install/refresh: see vendor/README.md
+  Both arms use UNATTENDED BENCHMARK MODE (no user questions) so headless can finish.
+  Baseline uses --no-extensions --no-skills to prevent global skill leakage.
+
+  Run:
+    hb experiment --from experiments/skills-superpowers-vs-baseline.yaml
+    hb execute <run_id>   # sequential recommended; superpowers may take longer
+    hb report
