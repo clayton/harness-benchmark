@@ -6,16 +6,10 @@
 
 ```bash
 curl -fsSL https://agentrodeo.dev/install.sh | sh
-```
-
-Then:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
 hb
 ```
 
-The installer is pinned to a release tag and checks a SHA-256 before it leaves `hb` on disk. It also tries to add `~/.local/bin` to your shell startup file. New terminals still need that PATH if the write did not stick.
+The installer is pinned to a release tag and checks a SHA-256. It puts `hb` in a directory already on your PATH when it can (Homebrew or `/usr/local/bin`). You should not need to edit a shell config. If it cannot, it prints one `export` line for that terminal.
 
 `hb` with no args prints **one** command. `hb doctor` is the full report. Nothing spends tokens until you paste the printed command.
 

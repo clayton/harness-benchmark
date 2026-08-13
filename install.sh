@@ -1,10 +1,10 @@
 #!/bin/sh
 # Pinned installer for hb. Downloads a tagged release, checks SHA-256, then
-# puts the binary in ~/.local/bin. Read this file before piping it to sh.
+# puts the binary in a directory already on PATH when it can.
+# Read this file before piping it to sh.
 set -eu
 
-TAG="v0.2.2"
-PREFIX="${HB_PREFIX:-$HOME/.local/bin}"
+TAG="v0.2.3"
 REPO="https://github.com/clayton/harness-benchmark"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -14,6 +14,82 @@ case "$ARCH" in
 esac
 
 NAME="hb-${OS}-${ARCH}"
+NEED_PATH=0
+
+on_path() {
+  case ":$PATH:" in
+    *":$1:"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+can_write() {
+  dir=$1
+  if [ -d "$dir" ]; then
+    [ -w "$dir" ]
+    return
+  fi
+  parent=$dir
+  while [ "$parent" != "/" ] && [ "$parent" != "." ] && [ -n "$parent" ]; do
+    parent=$(dirname "$parent")
+    if [ -d "$parent" ]; then
+      [ -w "$parent" ]
+      return
+    fi
+  done
+  return 1
+}
+
+pick_prefix() {
+  if [ -n "${HB_PREFIX:-}" ]; then
+    PREFIX=$HB_PREFIX
+    if on_path "$PREFIX"; then
+      NEED_PATH=0
+    else
+      NEED_PATH=1
+    fi
+    return
+  fi
+
+  if [ -n "${HB_CANDIDATES:-}" ]; then
+    oldifs=$IFS
+    IFS=:
+    # shellcheck disable=SC2086
+    set -- $HB_CANDIDATES
+    IFS=$oldifs
+  else
+    set -- \
+      /opt/homebrew/bin \
+      /usr/local/bin \
+      "$HOME/.local/bin" \
+      "$HOME/bin"
+  fi
+
+  for dir in "$@"; do
+    [ -n "$dir" ] || continue
+    on_path "$dir" || continue
+    can_write "$dir" || continue
+    PREFIX=$dir
+    NEED_PATH=0
+    return
+  done
+
+  PREFIX="${HOME}/.local/bin"
+  if on_path "$PREFIX"; then
+    NEED_PATH=0
+  else
+    NEED_PATH=1
+  fi
+}
+
+pick_prefix
+
+if [ "${HB_PRINT_PREFIX:-}" = "1" ]; then
+  echo "$PREFIX"
+  echo "need_path=$NEED_PATH"
+  exit 0
+fi
+
 mkdir -p "$PREFIX"
 BIN="$PREFIX/hb"
 
@@ -96,13 +172,11 @@ rc_file() {
 
 persist_path() {
   if [ "${HB_SKIP_PATH_RC:-}" = "1" ]; then
-    echo "new terminals: skipped rc write (HB_SKIP_PATH_RC=1)"
     return
   fi
   rc=$(rc_file)
   marker="# hb (harness-benchmark)"
   if [ -f "$rc" ] && grep -F "$PREFIX" "$rc" >/dev/null 2>&1; then
-    echo "new terminals: $PREFIX already in $rc"
     return
   fi
   {
@@ -110,7 +184,6 @@ persist_path() {
     echo "$marker"
     echo "export PATH=\"$PREFIX:\$PATH\""
   } >>"$rc"
-  echo "new terminals: added $PREFIX to $rc"
 }
 
 if ! install_from_release; then
@@ -123,6 +196,10 @@ if [ -x "$BIN" ]; then
   ver=$("$BIN" version 2>/dev/null || echo unknown)
 fi
 echo "installed $ver -> $BIN"
-echo "this shell:   export PATH=\"$PREFIX:\$PATH\""
-persist_path
-echo "next:         hb"
+if [ "$NEED_PATH" -eq 1 ]; then
+  echo "this terminal: export PATH=\"$PREFIX:\$PATH\""
+  persist_path
+else
+  echo "on PATH already"
+fi
+echo "next: hb"

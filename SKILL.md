@@ -9,14 +9,10 @@ Install the same way a human would:
 
 ```bash
 curl -fsSL https://agentrodeo.dev/install.sh | sh
-```
-
-Then:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
 hb
 ```
+
+If the installer prints an `export PATH=...` line, run that once in the same terminal, then `hb`.
 
 `hb` prints one command. Paste that. That is the first ride. Do not attach extra skills unless the user asks. After the ride:
 
