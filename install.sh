@@ -4,7 +4,7 @@
 # Read this file before piping it to sh.
 set -eu
 
-TAG="v0.2.3"
+TAG="v0.2.4"
 REPO="https://github.com/clayton/harness-benchmark"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -15,6 +15,7 @@ esac
 
 NAME="hb-${OS}-${ARCH}"
 NEED_PATH=0
+OTHER_HB=""
 
 on_path() {
   case ":$PATH:" in
@@ -38,6 +39,22 @@ can_write() {
     fi
   done
   return 1
+}
+
+is_our_hb() {
+  bin=$1
+  [ -x "$bin" ] || return 1
+  "$bin" version 2>/dev/null | grep -q '(go)'
+}
+
+# Refuse to overwrite Honeybadger's `hb` or any other namesake.
+slot_free() {
+  dest="$1/hb"
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
+    is_our_hb "$dest"
+    return
+  fi
+  return 0
 }
 
 pick_prefix() {
@@ -69,15 +86,23 @@ pick_prefix() {
     [ -n "$dir" ] || continue
     on_path "$dir" || continue
     can_write "$dir" || continue
+    slot_free "$dir" || continue
     PREFIX=$dir
-    NEED_PATH=0
-    return
+    break
   done
 
-  PREFIX="${HOME}/.local/bin"
-  if on_path "$PREFIX"; then
+  if [ -z "${PREFIX:-}" ]; then
+    PREFIX="${HOME}/.local/bin"
+  fi
+
+  existing=$(command -v hb 2>/dev/null || true)
+  if [ -n "$existing" ] && [ "$existing" != "$PREFIX/hb" ] && ! is_our_hb "$existing"; then
+    OTHER_HB=$existing
+  fi
+  if on_path "$PREFIX" && [ -z "$OTHER_HB" ]; then
     NEED_PATH=0
   else
+    # Prepend so a namesake earlier on PATH (Homebrew Honeybadger) does not win.
     NEED_PATH=1
   fi
 }
@@ -198,6 +223,9 @@ fi
 echo "installed $ver -> $BIN"
 if [ "$NEED_PATH" -eq 1 ]; then
   echo "this terminal: export PATH=\"$PREFIX:\$PATH\""
+  if [ -n "$OTHER_HB" ]; then
+    echo "note: another hb is already $OTHER_HB; that export makes this one win"
+  fi
   persist_path
 else
   echo "on PATH already"
