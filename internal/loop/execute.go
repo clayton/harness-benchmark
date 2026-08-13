@@ -23,7 +23,7 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	}
 	cmdLine := HeadlessCommand(rec.Harness)
 	if cmdLine == "" {
-		return ExecResult{}, fmt.Errorf("harness %s has no headless launch; use hb finish after a manual ride", rec.Harness)
+		return ExecResult{}, fmt.Errorf("harness %s has no headless launch; use hbench finish after a manual ride", rec.Harness)
 	}
 	if _, err := os.Stat(rec.Worktree); err != nil {
 		return ExecResult{}, fmt.Errorf("workspace missing: %s", rec.Worktree)

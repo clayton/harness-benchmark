@@ -49,13 +49,13 @@ out=$(HOME="$HOME" PATH="/usr/bin:/bin" HB_CANDIDATES="$brew:$usrlocal" HB_PRINT
 assert_eq "$(echo "$out" | sed -n '1p')" "$localbin" "falls back to ~/.local/bin"
 assert_eq "$(echo "$out" | sed -n '2p')" "need_path=1" "fallback asks for a one-time PATH export"
 
-# Homebrew already has a different hb: skip it.
-printf '#!/bin/sh\necho honeybadger\n' >"$brew/hb"
-chmod +x "$brew/hb"
+# Homebrew already has a different hbench: skip it.
+printf '#!/bin/sh\necho other\n' >"$brew/hbench"
+chmod +x "$brew/hbench"
 out=$(HOME="$HOME" PATH="$brew:$localbin:/usr/bin:/bin" HB_CANDIDATES="$brew:$usrlocal:$localbin" HB_PRINT_PREFIX=1 sh "$INSTALL")
-assert_eq "$(echo "$out" | sed -n '1p')" "$localbin" "skips a Homebrew hb that is not ours"
+assert_eq "$(echo "$out" | sed -n '1p')" "$localbin" "skips a Homebrew hbench that is not ours"
 assert_eq "$(echo "$out" | sed -n '2p')" "need_path=1" "prepends local bin so the namesake loses"
-rm -f "$brew/hb"
+rm -f "$brew/hbench"
 
 # Explicit override still wins.
 out=$(HOME="$HOME" PATH="/usr/bin:/bin" HB_PREFIX="$scratch/custom" HB_PRINT_PREFIX=1 sh "$INSTALL")

@@ -15,7 +15,7 @@ import (
 	"github.com/clayton/harness-benchmark/internal/report"
 )
 
-const version = "0.2.4"
+const version = "0.3.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -30,7 +30,7 @@ func run(args []string) error {
 	}
 	switch args[0] {
 	case "version", "--version", "-v":
-		fmt.Printf("hb %s (go)\n", version)
+		fmt.Printf("hbench %s (go)\n", version)
 		return nil
 	case "doctor":
 		return cmdDoctor()
@@ -55,19 +55,19 @@ func run(args []string) error {
 }
 
 func usage() string {
-	return `hb — compare coding-agent systems on fixed official tasks.
+	return `hbench — compare coding-agent systems on fixed official tasks.
 
 Commands:
-  hb                      print one suggested command
-  hb doctor               what this machine has
-  hb version
-  hb list scenarios
-  hb list runs
-  hb run -s <id> --harness <name>
-  hb execute [run_id]
-  hb finish [run_id]
-  hb report
-  hb publish [run_id]
+  hbench                      print one suggested command
+  hbench doctor               what this machine has
+  hbench version
+  hbench list scenarios
+  hbench list runs
+  hbench run -s <id> --harness <name>
+  hbench execute [run_id]
+  hbench finish [run_id]
+  hbench report
+  hbench publish [run_id]
 `
 }
 
@@ -97,7 +97,7 @@ func cmdSuggest() error {
 		return err
 	}
 	if sug.Command == "" {
-		fmt.Println("hb doctor")
+		fmt.Println("hbench doctor")
 		return nil
 	}
 	fmt.Println(sug.Command)
@@ -151,7 +151,7 @@ func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	fs.Usage = func() {
-		fmt.Fprint(os.Stdout, `hb run -s <scenario> --harness <name>
+		fmt.Fprint(os.Stdout, `hbench run -s <scenario> --harness <name>
 
   -s, --scenario   official scenario id
   --harness        grok, pi, claude, codex, or manual
@@ -170,7 +170,7 @@ func cmdRun(args []string) error {
 	}
 	if *scenario == "" || *harness == "" {
 		fs.Usage()
-		return fmt.Errorf("usage: hb run -s <scenario> --harness <name>")
+		return fmt.Errorf("usage: hbench run -s <scenario> --harness <name>")
 	}
 	l := layout()
 	if err := ensureCorpus(l); err != nil {
@@ -189,9 +189,9 @@ func cmdRun(args []string) error {
 	fmt.Printf("  workspace: %s\n", rec.Worktree)
 	fmt.Printf("  prompt:    %s\n", filepath.Join(rec.Worktree, "HB_PROMPT.txt"))
 	if loop.HeadlessCommand(*harness) != "" {
-		fmt.Printf("  next:      hb execute %s\n", rec.ID)
+		fmt.Printf("  next:      hbench execute %s\n", rec.ID)
 	} else {
-		fmt.Printf("  next:      work in the workspace, then hb finish %s\n", rec.ID)
+		fmt.Printf("  next:      work in the workspace, then hbench finish %s\n", rec.ID)
 	}
 	return nil
 }
@@ -228,8 +228,8 @@ func cmdExecute(args []string) error {
 		return ferr
 	}
 	fmt.Printf("Finished %s status=%s quality=%.2f\n", finished.ID, finished.Status, loop.Quality(finished))
-	fmt.Printf("  report: hb report\n")
-	fmt.Printf("  optional: hb publish %s\n", finished.ID)
+	fmt.Printf("  report: hbench report\n")
+	fmt.Printf("  optional: hbench publish %s\n", finished.ID)
 	return err
 }
 
@@ -278,7 +278,7 @@ func cmdReport() error {
 
 func cmdPublish(args []string) error {
 	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
-		fmt.Println("hb publish [run_id]  — upload a finished run to agentrodeo.dev (not automatic)")
+		fmt.Println("hbench publish [run_id]  — upload a finished run to agentrodeo.dev (not automatic)")
 		return nil
 	}
 	l := layout()

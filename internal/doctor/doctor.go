@@ -182,11 +182,11 @@ func Suggest(s Snapshot) Suggestion {
 	if len(out.Harnesses) > 0 {
 		h := out.Harnesses[0].Name
 		out.Kind = "execute"
-		out.Command = fmt.Sprintf("hb run -s %s --harness %s && hb execute", sc.ID, h)
+		out.Command = fmt.Sprintf("hbench run -s %s --harness %s && hbench execute", sc.ID, h)
 		return out
 	}
 	out.Kind = "prepare"
-	out.Command = fmt.Sprintf("hb run -s %s --harness manual", sc.ID)
+	out.Command = fmt.Sprintf("hbench run -s %s --harness manual", sc.ID)
 	out.Notes = append(out.Notes, "no headless harness on PATH; this only prepares a workspace")
 	return out
 }
@@ -234,7 +234,7 @@ func hasTag(tags []string, want string) bool {
 
 func Format(s Suggestion) string {
 	var b strings.Builder
-	b.WriteString("hb doctor\n")
+	b.WriteString("hbench doctor\n")
 	if len(s.Harnesses) > 0 {
 		b.WriteString("\nHarnesses (headless):\n")
 		for _, h := range s.Harnesses {

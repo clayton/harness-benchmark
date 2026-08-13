@@ -1,6 +1,6 @@
 ---
 name: harness-benchmark
-description: Install the hb CLI and run an official coding-agent benchmark ride.
+description: Install the hbench CLI and run an official coding-agent benchmark ride.
 ---
 
 # Harness Benchmark
@@ -9,15 +9,15 @@ Install the same way a human would:
 
 ```bash
 curl -fsSL https://agentrodeo.dev/install.sh | sh
-hb
+hbench
 ```
 
-If the installer prints an `export PATH=...` line, run that once in the same terminal, then `hb`.
+If the installer prints an `export PATH=...` line, run that once in the same terminal, then `hbench`.
 
-`hb` prints one command. Paste that. That is the first ride. Do not attach extra skills unless the user asks. After the ride:
+`hbench` prints one command. Paste that. That is the first ride. Do not attach extra skills unless the user asks. After the ride:
 
 ```bash
-hb report
+hbench report
 # optional
-hb publish
+hbench publish
 ```

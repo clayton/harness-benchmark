@@ -42,14 +42,14 @@ func TestBarePrintsOnlyTheSuggestedCommand(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
 	out := capture(t, nil)
-	if strings.Contains(out, "hb doctor") {
-		t.Fatalf("bare hb should not dump doctor:\n%s", out)
+	if strings.Contains(out, "hbench doctor") {
+		t.Fatalf("bare hbench should not dump doctor:\n%s", out)
 	}
 	if strings.Contains(out, "Harnesses") {
-		t.Fatalf("bare hb should not list harnesses:\n%s", out)
+		t.Fatalf("bare hbench should not list harnesses:\n%s", out)
 	}
-	if !strings.Contains(out, "hb run -s") {
-		t.Fatalf("bare hb should print one run command:\n%s", out)
+	if !strings.Contains(out, "hbench run -s") {
+		t.Fatalf("bare hbench should print one run command:\n%s", out)
 	}
 	if strings.Count(strings.TrimSpace(out), "\n") > 1 {
 		t.Fatalf("want one command line, got:\n%s", out)
@@ -64,7 +64,7 @@ func TestDoctorPrintsFullReport(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
 	out := capture(t, []string{"doctor"})
-	if !strings.Contains(out, "hb doctor") {
+	if !strings.Contains(out, "hbench doctor") {
 		t.Fatalf("missing doctor header:\n%s", out)
 	}
 	if !strings.Contains(out, "not attached") {
@@ -77,7 +77,7 @@ func TestDoctorPrintsFullReport(t *testing.T) {
 
 func TestRunHelpExitsZero(t *testing.T) {
 	out := capture(t, []string{"run", "--help"})
-	if !strings.Contains(out, "hb run -s") {
+	if !strings.Contains(out, "hbench run -s") {
 		t.Fatalf("run help:\n%s", out)
 	}
 }

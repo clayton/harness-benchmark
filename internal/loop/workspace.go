@@ -107,7 +107,7 @@ func PrepareWorktree(l paths.Layout, sc corpus.Scenario, runID string, runSetup 
 	if err := os.WriteFile(filepath.Join(dest, "HB_PROMPT.txt"), []byte(strings.TrimSpace(sc.Prompt)+"\n"), 0o644); err != nil {
 		return "", err
 	}
-	guide := fmt.Sprintf("# %s\n\nFeed the agent only HB_PROMPT.txt.\nThen: hb finish %s\n", sc.Title, runID)
+	guide := fmt.Sprintf("# %s\n\nFeed the agent only HB_PROMPT.txt.\nThen: hbench finish %s\n", sc.Title, runID)
 	_ = os.WriteFile(filepath.Join(dest, "HB_RUN.md"), []byte(guide), 0o644)
 	if runSetup {
 		for _, cmd := range sc.Acceptance.SetupCommands {

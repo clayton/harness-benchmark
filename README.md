@@ -6,18 +6,18 @@
 
 ```bash
 curl -fsSL https://agentrodeo.dev/install.sh | sh
-hb
+hbench
 ```
 
 The installer is pinned to a release tag and checks a SHA-256. It puts `hb` in a directory already on your PATH when it can (Homebrew or `/usr/local/bin`). You should not need to edit a shell config. If it cannot, it prints one `export` line for that terminal.
 
-`hb` with no args prints **one** command. `hb doctor` is the full report. Nothing spends tokens until you paste the printed command.
+`hbench` with no args prints **one** command. `hbench doctor` is the full report. Nothing spends tokens until you paste the printed command. The old `hb` name collided with Honeybadger's CLI, so the binary is `hbench`.
 
 After a ride:
 
 ```bash
-hb report          # local HTML in ./hb-out
-hb publish         # optional upload to agentrodeo.dev
+hbench report          # local HTML in ./hb-out
+hbench publish         # optional upload to agentrodeo.dev
 ```
 
 Same installer from a coding agent: see [SKILL.md](./SKILL.md).
@@ -25,7 +25,7 @@ Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 | | |
 |---|---|
 | **Status** | v0.2 — Go CLI |
-| **CLI** | `hb` |
+| **CLI** | `hbench` |
 | **License** | MIT |
 
 ---
@@ -89,22 +89,22 @@ Manual mode needs no API keys: prepare a workspace, run any agent yourself, `hb 
 ## 5-minute loop
 
 ```bash
-hb                         # one suggested command; hb doctor for the full report
+hbench                     # one suggested command; hbench doctor for the full report
 # paste what it prints, e.g.:
-hb run -s go-chi-tee-bytes-double-count --harness grok && hb execute
+hbench run -s go-chi-tee-bytes-double-count --harness grok && hbench execute
 
-hb report                  # local HTML in ./hb-out — nothing is uploaded
+hbench report              # local HTML in ./hb-out — nothing is uploaded
 # optional:
-hb publish                 # upload the latest finished run to agentrodeo.dev
+hbench publish             # upload the latest finished run to agentrodeo.dev
 ```
 
 Manual path (GUI harness, or you want to drive the agent yourself):
 
 ```bash
-hb run -s go-chi-tee-bytes-double-count --harness manual
+hbench run -s go-chi-tee-bytes-double-count --harness manual
 # work in the printed workspace on HB_PROMPT.txt, then:
-hb finish
-hb report
+hbench finish
+hbench report
 ```
 
 ---
@@ -141,21 +141,21 @@ See [WISHLIST.md](./WISHLIST.md): Docker sandboxes, formal multi-adapter package
 
 | Command | Purpose |
 |---------|---------|
-| `hb` | Print one suggested command |
-| `hb doctor` | Probe this machine (harnesses, toolchains, skills) |
-| `hb version` | Print `hb <ver> (go)` |
-| `hb list scenarios` | Official corpus from the home cache |
-| `hb list runs` | Local runs in `./hb-out` |
-| `hb run -s <id> --harness <name>` | New pending run + workspace |
-| `hb execute [run_id]` | Headless agent, then finish/judge (spends tokens) |
-| `hb finish [run_id]` | Capture patch, judge, save (manual path) |
-| `hb report` | Local HTML in `./hb-out/report.html` (does not upload) |
-| `hb publish [run_id]` | Optional upload to agentrodeo.dev |
+| `hbench` | Print one suggested command |
+| `hbench doctor` | Probe this machine (harnesses, toolchains, skills) |
+| `hbench version` | Print `hbench <ver> (go)` |
+| `hbench list scenarios` | Official corpus from the home cache |
+| `hbench list runs` | Local runs in `./hb-out` |
+| `hbench run -s <id> --harness <name>` | New pending run + workspace |
+| `hbench execute [run_id]` | Headless agent, then finish/judge (spends tokens) |
+| `hbench finish [run_id]` | Capture patch, judge, save (manual path) |
+| `hbench report` | Local HTML in `./hb-out/report.html` (does not upload) |
+| `hbench publish [run_id]` | Optional upload to agentrodeo.dev |
 
 ```bash
-hb
-hb version
-hb list scenarios
+hbench
+hbench version
+hbench list scenarios
 ```
 
 ---
@@ -320,7 +320,7 @@ The Python tree is not required to install or run `hb`.
 
 ## Status
 
-**v0.2 is the Go CLI.** Install with the one-liner, run `hb`, paste the suggested command. Community site: [agentrodeo.dev](https://agentrodeo.dev) — `hb publish` after a local ride.
+**v0.3 is the Go CLI (`hbench`).** Install with the one-liner, run `hbench`, paste the suggested command. Community site: [agentrodeo.dev](https://agentrodeo.dev) — `hbench publish` after a local ride.
 
 Not SWE-bench-scale. Directional signal first.
 

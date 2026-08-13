@@ -24,10 +24,10 @@ func TestSuggestHeadlessUsesRunAndExecute(t *testing.T) {
 	if got.Scenario != "js-commander-negative-exp-E" {
 		t.Fatalf("scenario=%s", got.Scenario)
 	}
-	if !strings.Contains(got.Command, "hb run -s js-commander-negative-exp-E --harness grok") {
+	if !strings.Contains(got.Command, "hbench run -s js-commander-negative-exp-E --harness grok") {
 		t.Fatalf("command=%q", got.Command)
 	}
-	if !strings.Contains(got.Command, "&& hb execute") {
+	if !strings.Contains(got.Command, "&& hbench execute") {
 		t.Fatalf("expected run+execute, got %q", got.Command)
 	}
 	if strings.Count(got.Command, "\n") != 0 {
@@ -86,7 +86,7 @@ func TestSuggestManualOnlyPreparesWorkspace(t *testing.T) {
 	if strings.Contains(got.Command, "execute") {
 		t.Fatalf("must not execute for GUI-only: %q", got.Command)
 	}
-	if !strings.Contains(got.Command, "hb run -s js-commander-negative-exp-E --harness manual") {
+	if !strings.Contains(got.Command, "hbench run -s js-commander-negative-exp-E --harness manual") {
 		t.Fatalf("command=%q", got.Command)
 	}
 }
