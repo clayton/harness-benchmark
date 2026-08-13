@@ -33,4 +33,10 @@ func TestWriteLocalHTMLDoesNotMentionUpload(t *testing.T) {
 	if !strings.Contains(body, "Nothing was uploaded") {
 		t.Fatal("report should say it did not upload")
 	}
+	if !strings.Contains(body, "hbench publish") {
+		t.Fatal("report should mention optional publish")
+	}
+	if !strings.Contains(body, "quality") {
+		t.Fatal("report should show quality")
+	}
 }

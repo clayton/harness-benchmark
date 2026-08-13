@@ -38,12 +38,11 @@ prompt: |
   - Fix the framework so stream item typing is preserved when routes are
     included through routers.
   - Keep runtime streaming behavior correct.
-  - Add or update unit/regression tests that assert OpenAPI (and related)
-    behavior for typed streams on routers.
   - Keep the change focused; do not refactor unrelated routing code.
+    You do not need to add a test; the judge applies the official
+    regression tests after you finish.
 
-  Work only in this repository checkout. Do not ask questions; implement and
-  verify with tests.
+  Work only in this repository checkout. Do not ask questions.
 
 acceptance:
   setup_commands:

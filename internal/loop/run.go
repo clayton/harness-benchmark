@@ -105,6 +105,11 @@ func ResolveRunID(l paths.Layout, id string) (string, error) {
 	if id != "" && id != "latest" {
 		return id, nil
 	}
+	if cwd, err := os.Getwd(); err == nil {
+		if rid := RunIDFromPath(cwd, l.OutDir); rid != "" {
+			return rid, nil
+		}
+	}
 	return LatestID(l)
 }
 

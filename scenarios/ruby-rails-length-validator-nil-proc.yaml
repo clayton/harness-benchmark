@@ -45,8 +45,9 @@ prompt: |
 
   Requirements:
   - Fix the validator implementation.
-  - Add a regression test in the ActiveModel length validation tests.
   - Keep the change minimal and localized to ActiveModel validations.
+    You do not need to add a test; the judge applies the official
+    regression tests after you finish.
 
 acceptance:
   must_pass_existing_tests: true

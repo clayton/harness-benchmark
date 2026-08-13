@@ -96,3 +96,217 @@ func TestListScenariosFromEmbeddedCorpus(t *testing.T) {
 		t.Fatalf("list:\n%s", out)
 	}
 }
+
+func captureResult(t *testing.T, args []string) (string, error) {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	runErr := run(args)
+	_ = w.Close()
+	os.Stdout = old
+	out, _ := io.ReadAll(r)
+	return string(out), runErr
+}
+
+func TestFinishHelpIsHelp(t *testing.T) {
+	out := capture(t, []string{"finish", "--help"})
+	if !strings.Contains(out, "hbench finish") {
+		t.Fatalf("finish help:\n%s", out)
+	}
+	if strings.Contains(out, "run not found") {
+		t.Fatalf("--help must not be parsed as a run id:\n%s", out)
+	}
+	if !strings.Contains(out, "--force") {
+		t.Fatalf("finish help should mention --force:\n%s", out)
+	}
+}
+
+func TestExecuteHelpIsHelp(t *testing.T) {
+	out := capture(t, []string{"execute", "--help"})
+	if !strings.Contains(out, "hbench execute") {
+		t.Fatalf("execute help:\n%s", out)
+	}
+	if strings.Contains(strings.ToLower(out), "spend tokens") {
+		t.Fatalf("execute help should not pitch tokens:\n%s", out)
+	}
+}
+
+func TestBareAfterPendingSuggestsFinish(t *testing.T) {
+	t.Setenv("HB_DATA_DIR", t.TempDir())
+	cwd := t.TempDir()
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
+	if err := os.MkdirAll(filepath.Join(cwd, "hb-out", "cafebabe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runJSON := `{
+  "id": "cafebabe",
+  "scenario_id": "go-chi-tee-bytes-double-count",
+  "status": "pending",
+  "harness": "manual",
+  "created_at": "2026-08-13T00:00:00Z"
+}
+`
+	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "cafebabe", "run.json"), []byte(runJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "latest"), []byte("cafebabe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := capture(t, nil)
+	if strings.TrimSpace(out) != "hbench finish cafebabe" {
+		t.Fatalf("pending next step: %q", out)
+	}
+}
+
+func TestBareAfterCompletedSuggestsReport(t *testing.T) {
+	t.Setenv("HB_DATA_DIR", t.TempDir())
+	cwd := t.TempDir()
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
+	if err := os.MkdirAll(filepath.Join(cwd, "hb-out", "cafebabe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runJSON := `{
+  "id": "cafebabe",
+  "scenario_id": "go-chi-tee-bytes-double-count",
+  "status": "completed",
+  "harness": "manual",
+  "created_at": "2026-08-13T00:00:00Z",
+  "finished_at": "2026-08-13T00:01:00Z"
+}
+`
+	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "cafebabe", "run.json"), []byte(runJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "latest"), []byte("cafebabe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := capture(t, nil)
+	if strings.TrimSpace(out) != "hbench report" {
+		t.Fatalf("completed next step: %q", out)
+	}
+}
+
+func TestReportMissingStoreNamesLookPath(t *testing.T) {
+	t.Setenv("HB_DATA_DIR", t.TempDir())
+	cwd := t.TempDir()
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
+	_, err := captureResult(t, []string{"report"})
+	if err == nil {
+		t.Fatal("report with no hb-out should fail")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, cwd) {
+		t.Fatalf("should name the look directory %s: %v", cwd, err)
+	}
+	if !strings.Contains(msg, "nothing was uploaded") {
+		t.Fatalf("should still say nothing uploaded: %v", err)
+	}
+	if strings.Contains(msg, "No ./hb-out yet") {
+		t.Fatalf("old fresh-install copy leaked: %v", err)
+	}
+}
+
+func TestFinishFromWorkspaceFindsAncestorRun(t *testing.T) {
+	t.Setenv("HB_DATA_DIR", t.TempDir())
+	start := t.TempDir()
+	ws := filepath.Join(start, "hb-out", "cafebabe", "workspace")
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runJSON := `{
+  "id": "cafebabe",
+  "scenario_id": "does-not-exist",
+  "status": "pending",
+  "harness": "manual",
+  "created_at": "2026-08-13T00:00:00Z"
+}
+`
+	if err := os.WriteFile(filepath.Join(start, "hb-out", "cafebabe", "run.json"), []byte(runJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(start, "hb-out", "latest"), []byte("cafebabe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(ws); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(start) })
+	_, err := captureResult(t, []string{"finish"})
+	if err == nil {
+		t.Fatal("expected scenario miss after loading the run")
+	}
+	if strings.Contains(err.Error(), "run not found") {
+		t.Fatalf("should resolve the run from the workspace ancestor hb-out: %v", err)
+	}
+	if !strings.Contains(err.Error(), "scenario not found: does-not-exist") {
+		t.Fatalf("should load the ancestor run: %v", err)
+	}
+}
+
+func TestExecuteManualDoesNotTalkAboutTokens(t *testing.T) {
+	t.Setenv("HB_DATA_DIR", t.TempDir())
+	cwd := t.TempDir()
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
+	if err := os.MkdirAll(filepath.Join(cwd, "hb-out", "cafebabe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runJSON := `{
+  "id": "cafebabe",
+  "scenario_id": "go-chi-tee-bytes-double-count",
+  "status": "pending",
+  "harness": "manual",
+  "created_at": "2026-08-13T00:00:00Z"
+}
+`
+	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "cafebabe", "run.json"), []byte(runJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "latest"), []byte("cafebabe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := captureResult(t, []string{"execute", "cafebabe"})
+	if err == nil {
+		t.Fatal("manual execute should fail")
+	}
+	if strings.Contains(out, "spend tokens") || strings.Contains(err.Error(), "spend tokens") {
+		t.Fatalf("manual path mentioned tokens:\n%s\n%v", out, err)
+	}
+	if !strings.Contains(err.Error(), "hbench finish cafebabe") {
+		t.Fatalf("should point at finish: %v", err)
+	}
+}
+
+func TestFinishUnknownIDNamesLookPath(t *testing.T) {
+	t.Setenv("HB_DATA_DIR", t.TempDir())
+	cwd := t.TempDir()
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
+	_, err := captureResult(t, []string{"finish", "no-such-run"})
+	if err == nil {
+		t.Fatal("expected run not found")
+	}
+	if !strings.Contains(err.Error(), "run not found: no-such-run") {
+		t.Fatalf("error: %v", err)
+	}
+	if !strings.Contains(err.Error(), filepath.Join(cwd, "hb-out")) {
+		t.Fatalf("should name ./hb-out path: %v", err)
+	}
+}

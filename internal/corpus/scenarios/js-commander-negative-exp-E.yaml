@@ -39,8 +39,8 @@ prompt: |
   - Negative numbers written with uppercase `E` exponents (e.g. `-1E3`, `-1.2E-3`)
     should be accepted the same way as lowercase `e`.
   - Existing lowercase behavior must keep working.
-  - Add or update tests covering uppercase exponent cases.
-  - Keep the change minimal.
+  - Keep the change minimal. You do not need to add a test; the judge applies
+    the official regression tests after you finish.
 
 acceptance:
   setup_commands:

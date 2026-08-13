@@ -35,8 +35,9 @@ prompt: |
 
   Requirements:
   - Implement the fix in the appropriate source file(s).
-  - Add or update unit tests covering the infinite-`rel` timedelta case.
   - Keep the change minimal; do not refactor unrelated code.
+    You do not need to add a test; the judge applies the official
+    regression tests after you finish.
   - Do not look up or copy the upstream fix from the internet if you can avoid it;
     solve from this description and the local code.
 

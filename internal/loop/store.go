@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/clayton/harness-benchmark/internal/paths"
@@ -67,7 +68,7 @@ func Save(l paths.Layout, r RunRecord) error {
 func Load(l paths.Layout, id string) (RunRecord, error) {
 	raw, err := os.ReadFile(filepath.Join(l.RunDir(id), "run.json"))
 	if err != nil {
-		return RunRecord{}, fmt.Errorf("run not found: %s", id)
+		return RunRecord{}, fmt.Errorf("run not found: %s\nlooked in %s", id, l.OutDir)
 	}
 	var r RunRecord
 	if err := json.Unmarshal(raw, &r); err != nil {
@@ -79,12 +80,69 @@ func Load(l paths.Layout, id string) (RunRecord, error) {
 func LatestID(l paths.Layout) (string, error) {
 	raw, err := os.ReadFile(l.LatestFile())
 	if err != nil {
-		return "", fmt.Errorf("no latest run")
+		return "", fmt.Errorf("no latest run in %s", l.OutDir)
 	}
 	if len(raw) == 0 {
-		return "", fmt.Errorf("no latest run")
+		return "", fmt.Errorf("no latest run in %s", l.OutDir)
 	}
 	return string(bytesTrim(raw)), nil
+}
+
+func LatestRecord(l paths.Layout) (RunRecord, error) {
+	id, err := LatestID(l)
+	if err != nil {
+		return RunRecord{}, err
+	}
+	return Load(l, id)
+}
+
+// RunIDFromPath returns the run id if path is inside that run's directory
+// (workspace, run dir, or a child). Empty when path is not under OutDir.
+func RunIDFromPath(path, outDir string) string {
+	if path == "" || outDir == "" {
+		return ""
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		absPath = path
+	}
+	absOut, err := filepath.Abs(outDir)
+	if err != nil {
+		absOut = outDir
+	}
+	rel, err := filepath.Rel(absOut, absPath)
+	if err != nil || rel == "." || rel == "" {
+		return ""
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	parts := splitPath(rel)
+	if len(parts) == 0 {
+		return ""
+	}
+	id := parts[0]
+	if _, err := os.Stat(filepath.Join(absOut, id, "run.json")); err != nil {
+		return ""
+	}
+	return id
+}
+
+func splitPath(p string) []string {
+	var out []string
+	for p != "" && p != "." {
+		base := filepath.Base(p)
+		if base == "." || base == string(filepath.Separator) {
+			break
+		}
+		out = append([]string{base}, out...)
+		next := filepath.Dir(p)
+		if next == p {
+			break
+		}
+		p = next
+	}
+	return out
 }
 
 func SetLatest(l paths.Layout, id string) error {

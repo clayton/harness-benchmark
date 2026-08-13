@@ -89,7 +89,7 @@ func TestCreateRunAndFinishWithoutExecute(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rec.Worktree, "app.sh"), []byte("echo bye\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	finished, err := Finish(l, rec.ID, sc, 12, "manual")
+	finished, err := Finish(l, rec.ID, sc, 12, "manual", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +241,7 @@ func TestFinishOverlaysGoldTestsBeforeScoring(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(wrong.Worktree, "app.sh"), []byte("echo no\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	failed, err := Finish(l, wrong.ID, sc, 5, "wrong")
+	failed, err := Finish(l, wrong.ID, sc, 5, "wrong", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +272,7 @@ func TestFinishOverlaysGoldTestsBeforeScoring(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(fix.Worktree, "app.sh"), []byte("echo bye\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	passed, err := Finish(l, fix.ID, sc, 5, "fix")
+	passed, err := Finish(l, fix.ID, sc, 5, "fix", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,5 +306,150 @@ func TestPrepareWorktreeOfficialChiHasSourceFiles(t *testing.T) {
 		if info.Size() == 0 {
 			t.Fatalf("official chi %s is empty", rel)
 		}
+	}
+}
+
+func TestLoadNamesTheLookPath(t *testing.T) {
+	l := paths.New(t.TempDir(), t.TempDir())
+	_, err := Load(l, "missingid")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "run not found: missingid") {
+		t.Fatalf("error: %v", err)
+	}
+	if !strings.Contains(err.Error(), l.OutDir) {
+		t.Fatalf("error should name hb-out path %s: %v", l.OutDir, err)
+	}
+}
+
+func TestResolveRunIDFromWorkspacePath(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	l := paths.New(home, cwd)
+	rec := RunRecord{ID: "aabbccdd", Status: "pending", CreatedAt: Now()}
+	if err := Save(l, rec); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetLatest(l, rec.ID); err != nil {
+		t.Fatal(err)
+	}
+	ws := l.Worktree(rec.ID)
+	if err := os.MkdirAll(ws, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got := RunIDFromPath(ws, l.OutDir)
+	if got != rec.ID {
+		t.Fatalf("from workspace: got %s", got)
+	}
+	got = RunIDFromPath(filepath.Join(ws, "middleware"), l.OutDir)
+	if got != rec.ID {
+		t.Fatalf("from nested: got %s", got)
+	}
+	got = RunIDFromPath(t.TempDir(), l.OutDir)
+	if got != "" {
+		t.Fatalf("unrelated path should not resolve: %s", got)
+	}
+}
+
+func TestFinishDoesNotRejudgeCompletedWithoutForce(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	src := filepath.Join(home, "src")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, src)
+	sha := os.Getenv("HB_TEST_SHA")
+	l := paths.New(home, cwd)
+	l.DataDir = filepath.Join(home, "data")
+	sc := corpus.Scenario{
+		ID:       "local-echo",
+		Title:    "say bye",
+		Prompt:   "change hi to bye",
+		Language: "sh",
+		Repo:     corpus.Repo{URL: src, BaseRef: sha},
+		Acceptance: corpus.Acceptance{
+			TestCommands: []string{"sh test.sh"},
+		},
+	}
+	rec, err := CreateRun(l, sc, "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rec.Worktree, "app.sh"), []byte("echo bye\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, err := Finish(l, rec.ID, sc, 12, "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != "completed" {
+		t.Fatalf("status=%s", first.Status)
+	}
+	marker := filepath.Join(l.RunDir(rec.ID), "judge-sh-test-sh.txt")
+	info1, err := os.Stat(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Finish(l, rec.ID, sc, 99, "again", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.FinishedAt != first.FinishedAt {
+		t.Fatalf("re-judged without --force: %s vs %s", first.FinishedAt, second.FinishedAt)
+	}
+	info2, err := os.Stat(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info2.ModTime().Equal(info1.ModTime()) {
+		t.Fatal("judge output rewritten without --force")
+	}
+	third, err := Finish(l, rec.ID, sc, 99, "forced", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.FinishedAt == first.FinishedAt {
+		t.Fatal("--force should re-judge")
+	}
+}
+
+func TestManualWorkspaceGuideHasNoAgentSlang(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	src := filepath.Join(home, "src")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, src)
+	sha := os.Getenv("HB_TEST_SHA")
+	l := paths.New(home, cwd)
+	l.DataDir = filepath.Join(home, "data")
+	sc := corpus.Scenario{
+		ID:     "local-echo",
+		Title:  "say bye",
+		Prompt: "change hi to bye",
+		Repo:   corpus.Repo{URL: src, BaseRef: sha},
+	}
+	rec, err := CreateRun(l, sc, "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(rec.Worktree, "HB_RUN.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := strings.ToLower(string(raw))
+	for _, word := range []string{"agent", "token", "feed"} {
+		if strings.Contains(body, word) {
+			t.Fatalf("manual guide still says %q:\n%s", word, raw)
+		}
+	}
+	if !strings.Contains(string(raw), "Stay in the directory") {
+		t.Fatalf("guide should say stay in the start directory:\n%s", raw)
+	}
+	if !strings.Contains(string(raw), "hbench finish "+rec.ID) {
+		t.Fatalf("guide missing finish command:\n%s", raw)
 	}
 }

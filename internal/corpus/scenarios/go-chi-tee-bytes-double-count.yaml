@@ -35,8 +35,8 @@ prompt: |
   - Fix the double-counting so `BytesWritten()` matches the true transfer size
     when Tee is used.
   - Do not break the non-Tee `ReadFrom` path.
-  - Add a regression test that fails on the buggy behavior and passes after the fix.
-  - Keep the change minimal.
+  - Keep the change minimal. You do not need to add a test; the judge applies
+    the official regression test after you finish.
 
 acceptance:
   setup_commands: []

@@ -14,10 +14,17 @@ import (
 
 var testPathRe = regexp.MustCompile(`(?i)(^|/)(test|tests|spec|__tests__)(/|$)|(test|spec)\.[a-z0-9]+$`)
 
-func Finish(l paths.Layout, id string, sc corpus.Scenario, wallMS int, notes string) (RunRecord, error) {
+func AlreadyScored(rec RunRecord) bool {
+	return rec.Status == "completed"
+}
+
+func Finish(l paths.Layout, id string, sc corpus.Scenario, wallMS int, notes string, force bool) (RunRecord, error) {
 	rec, err := Load(l, id)
 	if err != nil {
 		return RunRecord{}, err
+	}
+	if AlreadyScored(rec) && !force {
+		return rec, nil
 	}
 	diff, err := gitDiff(rec.Worktree)
 	if err != nil {

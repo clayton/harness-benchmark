@@ -102,7 +102,7 @@ Manual path (GUI harness, or you want to drive the agent yourself):
 
 ```bash
 hbench run -s go-chi-tee-bytes-double-count --harness manual
-# work in the printed workspace on HB_PROMPT.txt, then:
+# stay in this directory; open the printed workspace, fix the prompt, then:
 hbench finish
 hbench report
 ```
@@ -147,8 +147,8 @@ See [WISHLIST.md](./WISHLIST.md): Docker sandboxes, formal multi-adapter package
 | `hbench list scenarios` | Official corpus from the home cache |
 | `hbench list runs` | Local runs in `./hb-out` |
 | `hbench run -s <id> --harness <name>` | New pending run + workspace |
-| `hbench execute [run_id]` | Headless agent, then finish/judge (spends tokens) |
-| `hbench finish [run_id]` | Capture patch, judge, save (manual path) |
+| `hbench execute [run_id]` | Headless harness, then finish/judge (spends tokens) |
+| `hbench finish [run_id]` | Capture patch, judge, save. Stay in the start directory. `--force` to re-judge. |
 | `hbench report` | Local HTML in `./hb-out/report.html` (does not upload) |
 | `hbench publish [run_id]` | Optional upload to agentrodeo.dev |
 
