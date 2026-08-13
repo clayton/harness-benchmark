@@ -93,26 +93,22 @@ Manual mode needs no API keys: prepare a workspace, run any agent yourself, `hb 
 ## 5-minute loop
 
 ```bash
-# 1) Create a pending run (fresh workspace at scenario base_ref)
-hb run -s js-commander-negative-exp-E -c pi-grok45-baseline
+hb                         # doctor: one suggested command
+# paste what it prints, e.g.:
+hb run -s go-chi-tee-bytes-double-count --harness grok && hb execute
 
-# 2a) Headless (preferred — captures tokens/$ from JSON agent logs)
-hb execute <run_id>
-
-# 2b) Or open the printed workspace and run your agent on HB_PROMPT.txt, then:
-# hb finish <run_id>
-
-# 3) Static report with links into results/<run_id>/
-hb report
-open reports/latest.html
+hb report                  # local HTML in ./hb-out — nothing is uploaded
+# optional:
+hb publish                 # upload the latest finished run to agentrodeo.dev
 ```
 
-Re-spend the same combo:
+Manual path (GUI harness, or you want to drive the agent yourself):
 
 ```bash
-hb run -s js-commander-negative-exp-E -c pi-grok45-baseline --force
-# or always create a new trial from a frozen snapshot:
-hb rerun <run_id> && hb execute <new_run_id>
+hb run -s go-chi-tee-bytes-double-count --harness manual
+# work in the printed workspace on HB_PROMPT.txt, then:
+hb finish
+hb report
 ```
 
 ---
@@ -149,24 +145,20 @@ See [WISHLIST.md](./WISHLIST.md): Docker sandboxes, formal multi-adapter package
 
 | Command | Purpose |
 |---------|---------|
-| `hb validate` | Schema-check scenarios / configs |
-| `hb list` | `scenarios` \| `configs` \| `runs` \| `all` |
-| `hb prepare` / `hb reset` | Shared workspace helpers |
-| `hb show-prompt` | Print agent prompt |
-| `hb run` | New run id + fresh instance workspace |
-| `hb execute` | Headless agent + budget + finish/judge |
-| `hb finish` | Capture patch, judge, save (manual path) |
-| `hb experiment` | Matrix of pending runs (`--from`, `--force`, `--repeats`) |
-| `hb rerun` | New trial from frozen snapshot |
-| `hb show-snapshot` | Inspect frozen definition |
-| `hb judge` | Tests only (no result record) |
-| `hb ingest` | One-shot record from worktree/patch |
-| `hb report` | Static HTML (`--from` / `--experiment` / `--out`) |
+| `hb` / `hb doctor` | Probe this machine and print one suggested first ride |
+| `hb version` | Print `hb <ver> (go)` |
+| `hb list scenarios` | Official corpus from the home cache |
+| `hb list runs` | Local runs in `./hb-out` |
+| `hb run -s <id> --harness <name>` | New pending run + workspace |
+| `hb execute [run_id]` | Headless agent, then finish/judge (spends tokens) |
+| `hb finish [run_id]` | Capture patch, judge, save (manual path) |
+| `hb report` | Local HTML in `./hb-out/report.html` (does not upload) |
+| `hb publish [run_id]` | Optional upload to agentrodeo.dev |
 
 ```bash
-hb --help
-hb execute --help
-hb report --help
+hb
+hb version
+hb list scenarios
 ```
 
 ---
@@ -182,13 +174,7 @@ Pre-built matrices under `experiments/`:
 | `skills-superpowers-hard.yaml` | Same on a harder FastAPI multi-file bug |
 | `skills-superpowers-proxy-incomplete.yaml` | Incomplete prompt + stakeholder proxy |
 
-Walkthroughs and directional findings: **[docs/EXAMPLES.md](./docs/EXAMPLES.md)**.
-
-```bash
-hb experiment --from experiments/harness-pi-vs-grok-model45.yaml
-hb execute <run_id>          # for each pending run
-hb report --from experiments/harness-pi-vs-grok-model45.yaml
-```
+Walkthroughs and directional findings: **[docs/EXAMPLES.md](./docs/EXAMPLES.md)**. Those YAML matrices were run with the older Python CLI; v0.2 is one official ride at a time via `hb run` / `hb execute`.
 
 ---
 
@@ -285,41 +271,26 @@ Dialogue → `results/<run_id>/dialogue.json`. Proxy $ is tracked separately fro
 ## Reports & artifacts
 
 ```bash
-hb report                              # reports/latest.html
-hb report --from experiments/foo.yaml  # reports/exp-<id>.html + hypothesis
-hb report -e skills-superpowers-hard
+hb report          # ./hb-out/report.html — local only, nothing uploaded
 ```
 
-Open HTML **from the repo tree** so relative links resolve:
-
-```text
-reports/latest.html  →  ../results/<run_id>/patch.diff
-                     →  ../results/<run_id>/agent.log
-                     →  ../results/<run_id>/dialogue.json
-                     →  ../results/<run_id>/snapshot.json
-                     →  ../results/<run_id>/judge.json
-                     →  ../results/<run_id>/run.json
-```
-
-Local run data (`results/*`, `reports/*`, `workspaces/`) is **gitignored** by default so clones stay small. Re-run experiments on your machine to regenerate them.
+Run records live under `./hb-out/<run_id>/` (`run.json`, `patch.diff`, `snapshot.json`, …). Official YAML is cached in the home data dir. Older `results/` and `reports/` trees in this repo are leftover personal experiment output.
 
 ---
 
 ## Repo layout
 
 ```text
-hb/              Python package (CLI, execute, judge, report, budget, …)
-scenarios/       Task definitions (YAML)
-configs/         Treatment recipes (YAML) — pin harness_version
-experiments/     Matrix definitions (YAML)
-tests/           Unit tests (pytest)
-scripts/         Smoke helpers for scenario envs
-adapters/        Notes on future harness adapters
-vendor/          Pins for experiment deps (clone instructions; large checkouts ignored)
+cmd/hb/          Go CLI entry (this is `hb`)
+internal/        doctor, corpus, run/execute/judge, report, publish
+install.sh       One-line installer (release binary, else go build)
+SKILL.md         Same installer for coding agents
+scenarios/       Official task definitions (also embedded in the binary)
+configs/         Older treatment recipes (YAML)
+experiments/     Older matrix definitions (YAML)
+hb/              Leftover Python package — not the user-facing CLI
+tests/           Leftover Python unit tests
 docs/            Examples and guides
-results/         Local run records (gitignored contents)
-reports/         Local HTML (gitignored contents)
-workspaces/      Local clones/instances (gitignored)
 DESIGN.md        Architecture & principles
 WISHLIST.md      Future ideas
 ```
@@ -329,12 +300,11 @@ WISHLIST.md      Future ideas
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-pytest -q
-ruff check hb tests
-hb validate
-./scripts/smoke_scenarios.sh    # optional: prepare easy scenario envs
+go test -mod=mod ./cmd/... ./internal/...
+go build -mod=mod -o hb ./cmd/hb
 ```
+
+The Python tree is not required to install or run `hb`.
 
 ---
 
@@ -353,9 +323,7 @@ hb validate
 
 ## Status
 
-**v0 is usable for personal experiments.** Easy and harder scenarios smoked; headless pi/Grok execute with tokens/$; superpowers A/B; incomplete-spec + proxy; budget kill; experiment HTML with artifact links.
-
-Community site (v1): [agentrodeo.dev](https://agentrodeo.dev) — `hb rider init` then `hb publish <run_id>`.
+**v0.2 is the Go CLI.** Install with the one-liner, run `hb`, paste the suggested command. Community site: [agentrodeo.dev](https://agentrodeo.dev) — `hb publish` after a local ride.
 
 Not SWE-bench-scale. Directional signal first.
 
