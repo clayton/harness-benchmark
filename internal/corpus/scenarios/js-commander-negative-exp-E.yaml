@@ -1,0 +1,70 @@
+id: js-commander-negative-exp-E
+type: bugfix
+title: "commander: accept uppercase E in negative number args"
+description: >
+  commander.js treats unescaped negative numbers as special arguments, but the
+  detector only matches lowercase e in scientific notation, so -1E3 is wrongly
+  rejected as an unknown option.
+language: javascript
+tags: [javascript, commander, cli, easy, smoke-ok]
+contamination_risk: medium
+difficulty: easy
+source: "https://github.com/tj/commander.js/pull/2544"
+
+repo:
+  url: "https://github.com/tj/commander.js.git"
+  base_ref: "c3ffcfcdac9237cb446ae0acc5b228380e6ba52a"
+  gold_ref: "a6bcd2ec188dd684c11076ea74747b46eb32f44c"
+
+prompt: |
+  You are working in the commander.js repository (checked out at the provided base commit).
+
+  Bug:
+  Commander accepts unescaped negative numbers as command-arguments and as
+  optional/variadic option-arguments (negative numbers are special and should
+  not be treated as unknown flags).
+
+  Scientific notation with a **lowercase** exponent works:
+
+    program.argument('<temp>');
+    program.parse(['-1e3'], { from: 'user' }); // ok
+
+  But the same value with an **uppercase** exponent fails:
+
+    program.parse(['-1E3'], { from: 'user' }); // error: unknown option '-1E3'
+
+  JavaScript parses `-1E3` and `-1e3` identically (`Number('-1E3') === -1000`).
+
+  Requirements:
+  - Negative numbers written with uppercase `E` exponents (e.g. `-1E3`, `-1.2E-3`)
+    should be accepted the same way as lowercase `e`.
+  - Existing lowercase behavior must keep working.
+  - Add or update tests covering uppercase exponent cases.
+  - Keep the change minimal.
+
+acceptance:
+  setup_commands:
+    - "npm install"
+  test_commands:
+    - "node --test tests/negatives.test.js"
+  build_commands: []
+  fail_to_pass:
+    - "tests/negatives.test.js (uppercase E cases added on gold)"
+  must_pass_existing_tests: true
+  notes: >
+    SMOKE VERIFIED 2026-08-11.
+    Do NOT use `npm test -- tests/negatives.test.js` — package `npm test` runs
+    the full suite + typecheck and hits unrelated env-sensitive color tests.
+    Correct command is `node --test tests/negatives.test.js`.
+    Base: 124 pass; uppercase -1E3 raises unknown option. Gold: 152 pass; -1E3 accepted.
+    Requires Node >= 22.12 (engines field).
+
+allowed_paths:
+  - "lib/command.js"
+  - "tests/negatives.test.js"
+
+metadata:
+  pr: 2544
+  upstream_title: "fix: accept uppercase E exponent in negative number args"
+  smoke_status: ok
+  workspace: workspaces/commander

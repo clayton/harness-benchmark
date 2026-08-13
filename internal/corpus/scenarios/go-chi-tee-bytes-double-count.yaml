@@ -1,0 +1,64 @@
+id: go-chi-tee-bytes-double-count
+type: bugfix
+title: "chi: Tee path double-counts BytesWritten in ReadFrom"
+description: >
+  In go-chi/chi middleware wrap writer, httpFancyWriter.ReadFrom double-counts
+  bytes when a Tee writer is set, so BytesWritten() returns twice the real
+  transfer size.
+language: go
+tags: [go, chi, middleware, http, easy, smoke-ok]
+contamination_risk: medium
+difficulty: easy
+source: "https://github.com/go-chi/chi/pull/1085"
+
+repo:
+  url: "https://github.com/go-chi/chi.git"
+  base_ref: "a54874f0e2f12647a19e82ee70dfa8185014100c"
+  gold_ref: "4ef87eaf2cfb27d3126d48194e1a84806acc1aed"
+
+prompt: |
+  You are working in the go-chi/chi repository (checked out at the provided base commit).
+
+  Bug:
+  `httpFancyWriter.ReadFrom` in the middleware wrap-writer implementation can
+  report the wrong value from `BytesWritten()` when a Tee writer is configured.
+
+  Observed behavior: with Tee enabled, `BytesWritten()` returns **twice** the
+  number of bytes actually transferred through `ReadFrom`.
+
+  Context:
+  - There is a Tee path and a non-Tee path in `ReadFrom`.
+  - One of those paths is double-counting byte totals; the other should keep
+    working correctly.
+
+  Requirements:
+  - Fix the double-counting so `BytesWritten()` matches the true transfer size
+    when Tee is used.
+  - Do not break the non-Tee `ReadFrom` path.
+  - Add a regression test that fails on the buggy behavior and passes after the fix.
+  - Keep the change minimal.
+
+acceptance:
+  setup_commands: []
+  test_commands:
+    - "go test ./middleware/ -count=1"
+  build_commands:
+    - "go test ./... -count=1"
+  fail_to_pass:
+    - "TestHttpFancyWriterReadFromByteCountWithTee"
+  must_pass_existing_tests: true
+  notes: >
+    SMOKE VERIFIED 2026-08-11.
+    At base_ref, existing middleware tests pass (~26s). Regression test exists
+    only on gold_ref. Applying gold wrap_writer_test.go onto base code fails with
+    expecting 11 vs 22 (double-count). Gold: middleware package ok.
+
+allowed_paths:
+  - "middleware/wrap_writer.go"
+  - "middleware/wrap_writer_test.go"
+
+metadata:
+  pr: 1085
+  upstream_title: "middleware: fix httpFancyWriter.ReadFrom double-counting bytes with Tee"
+  smoke_status: ok
+  workspace: workspaces/chi

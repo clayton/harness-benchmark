@@ -48,3 +48,7 @@ vendor/*/
 *.log
 tmp/
 .cache/
+
+# Go CLI build output
+/bin/
+/hb-out/

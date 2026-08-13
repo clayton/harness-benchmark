@@ -2,14 +2,33 @@
 
 **Compare coding-agent *systems*** — harness + model + tools + workflow — on fixed real-world tasks, with **quality and cost** side by side.
 
-This is a personal, open-source experiment platform. Not an academic leaderboard. A handful of scenarios is enough to answer:
+## Install
 
-> For this task, does configuration A beat configuration B on quality per dollar?
+```bash
+curl -fsSL https://agentrodeo.dev/install.sh | sh
+```
+
+Then:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+hb
+```
+
+`hb` prints what it found on your machine and **one** command to paste. That first ride is a baseline (no extra skills). Nothing spends tokens until you paste it.
+
+After a ride:
+
+```bash
+hb report          # local HTML in ./hb-out
+hb publish         # optional upload to agentrodeo.dev
+```
+
+Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 
 | | |
 |---|---|
-| **Status** | v0 — run loop works end-to-end |
-| **Language** | Python 3.11+ |
+| **Status** | v0.2 — Go CLI |
 | **CLI** | `hb` |
 | **License** | MIT |
 
@@ -57,22 +76,7 @@ Future work: **[WISHLIST.md](./WISHLIST.md)**.
 
 ---
 
-## Install
-
-```bash
-git clone https://github.com/<you>/harness-benchmark.git
-cd harness-benchmark
-
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
-
-hb validate
-hb list scenarios
-hb list configs
-```
-
-### Optional: harness CLIs + API keys
+## Optional: harness CLIs + API keys
 
 Headless execute needs whatever harness you pin in a config:
 

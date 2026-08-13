@@ -1,0 +1,67 @@
+id: ts-got-searchparams-setter
+type: bugfix
+title: "got: searchParams setter drops value when URL is set"
+description: >
+  Assigning options.searchParams on a got Options instance silently drops the
+  new value when a URL is already set (common in beforeRequest hooks), so the
+  request keeps the old query string.
+language: typescript
+tags: [typescript, got, http, hooks, medium]
+contamination_risk: medium
+difficulty: medium
+source: "https://github.com/sindresorhus/got/pull/2454"
+
+repo:
+  url: "https://github.com/sindresorhus/got.git"
+  base_ref: "a5b76bffb33d5fa8b0d1393cce410b88e7c2b848"
+  gold_ref: "5772bf24dc7dd69db52fc26f8274039f52063fd2"
+
+prompt: |
+  You are working in the got HTTP client repository (checked out at the provided base commit).
+
+  Bug:
+  Assigning to `options.searchParams` directly on an `Options` instance can
+  silently drop the new value. The query string actually sent on the request
+  stays unchanged.
+
+  This shows up especially in `beforeRequest` hooks, where mutating `options`
+  is a documented pattern:
+
+    await got('https://example.com', {
+      searchParams: { old: 'value' },
+      hooks: {
+        beforeRequest: [
+          options => {
+            options.searchParams = { foo: 'bar' };
+          },
+        ],
+      },
+    });
+    // buggy: request still uses ?old=value
+    // expected: request uses ?foo=bar
+
+  Documentation says `searchParams` should override the query string in `url`.
+
+  Requirements:
+  - Fix assignment to `searchParams` so the new value is applied and used for
+    the outgoing request when a URL is already set.
+  - Preserve sensible behavior for other ways of setting/merging search params.
+  - Add or update tests that cover hook-based reassignment (and related cases).
+  - Keep the change minimal; avoid unrelated refactors.
+
+acceptance:
+  must_pass_existing_tests: true
+  test_commands:
+    - "npm test -- test/hooks.ts test/normalize-arguments.ts"
+  build_commands:
+    - "npm test"
+  notes: "npm install at base_ref first. TypeScript test runner per package scripts."
+
+allowed_paths:
+  - "source/core/options.ts"
+  - "test/hooks.ts"
+  - "test/normalize-arguments.ts"
+
+metadata:
+  pr: 2454
+  upstream_title: "Fix searchParams setter dropping the value when a URL is set"
