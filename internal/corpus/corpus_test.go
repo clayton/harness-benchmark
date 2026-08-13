@@ -46,3 +46,23 @@ func TestFindReturnsCachedScenario(t *testing.T) {
 		t.Fatalf("language=%s", s.Language)
 	}
 }
+
+func TestOfficialChiYAMLHasGoldAndFailToPass(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureCache(dir); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Find(dir, "go-chi-tee-bytes-double-count")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Repo.GoldRef == "" {
+		t.Fatal("gold_ref missing")
+	}
+	if len(s.Acceptance.FailToPass) == 0 {
+		t.Fatal("fail_to_pass missing from official chi YAML")
+	}
+	if s.Acceptance.FailToPass[0] != "TestHttpFancyWriterReadFromByteCountWithTee" {
+		t.Fatalf("fail_to_pass=%v", s.Acceptance.FailToPass)
+	}
+}

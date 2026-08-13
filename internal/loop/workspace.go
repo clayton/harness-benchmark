@@ -27,17 +27,52 @@ func repoSlug(url string) string {
 
 func ensureRepo(l paths.Layout, sc corpus.Scenario) (string, error) {
 	cache := filepath.Join(l.ReposDir(), repoSlug(sc.Repo.URL))
-	if _, err := os.Stat(filepath.Join(cache, ".git")); err == nil {
-		_ = git(cache, "fetch", "--depth=1", "origin", sc.Repo.BaseRef)
-		return cache, nil
+	// Leftover blobless caches cannot serve historical blobs to a worktree.
+	if isPartialClone(cache) {
+		if err := os.RemoveAll(cache); err != nil {
+			return "", err
+		}
 	}
-	if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
-		return "", err
+	if _, err := os.Stat(filepath.Join(cache, ".git")); err != nil {
+		if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
+			return "", err
+		}
+		if err := runGit("", "clone", sc.Repo.URL, cache); err != nil {
+			return "", fmt.Errorf("clone %s: %w", sc.Repo.URL, err)
+		}
 	}
-	if err := runGit("", "clone", "--filter=blob:none", sc.Repo.URL, cache); err != nil {
-		return "", fmt.Errorf("clone %s: %w", sc.Repo.URL, err)
+	if err := fetchRef(cache, sc.Repo.BaseRef); err != nil {
+		return "", fmt.Errorf("fetch base_ref %s: %w", sc.Repo.BaseRef, err)
+	}
+	if sc.Repo.GoldRef != "" {
+		if err := fetchRef(cache, sc.Repo.GoldRef); err != nil {
+			return "", fmt.Errorf("fetch gold_ref %s: %w", sc.Repo.GoldRef, err)
+		}
 	}
 	return cache, nil
+}
+
+func isPartialClone(repo string) bool {
+	if _, err := os.Stat(filepath.Join(repo, ".git")); err != nil {
+		return false
+	}
+	out, err := exec.Command("git", "-C", repo, "config", "--get", "remote.origin.partialclonefilter").Output()
+	return err == nil && strings.TrimSpace(string(out)) != ""
+}
+
+func fetchRef(repo, ref string) error {
+	if ref == "" {
+		return nil
+	}
+	if err := git(repo, "cat-file", "-t", ref); err == nil {
+		return nil
+	}
+	if err := git(repo, "fetch", "--depth=1", "origin", ref); err != nil {
+		if err2 := git(repo, "fetch", "origin", ref); err2 != nil {
+			return err
+		}
+	}
+	return git(repo, "cat-file", "-t", ref)
 }
 
 func PrepareWorktree(l paths.Layout, sc corpus.Scenario, runID string, runSetup bool) (string, error) {
@@ -52,14 +87,19 @@ func PrepareWorktree(l paths.Layout, sc corpus.Scenario, runID string, runSetup 
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
-	if err := runGit("", "clone", cache, dest); err != nil {
+	// Clone from the scenario remote, not the cache. A worktree whose origin is
+	// a blobless cache cannot fetch historical blobs (chi.go / wrap_writer.go).
+	if err := runGit("", "clone", sc.Repo.URL, dest); err != nil {
 		return "", fmt.Errorf("worktree clone: %w", err)
 	}
-	if err := git(dest, "checkout", "--detach", sc.Repo.BaseRef); err != nil {
-		_ = git(dest, "fetch", "--depth=1", "origin", sc.Repo.BaseRef)
-		if err2 := git(dest, "checkout", "--detach", sc.Repo.BaseRef); err2 != nil {
-			return "", fmt.Errorf("checkout %s: %w", sc.Repo.BaseRef, err2)
+	if err := fetchRef(dest, sc.Repo.BaseRef); err != nil {
+		_ = git(dest, "remote", "remove", "hb-cache")
+		if err := git(dest, "remote", "add", "hb-cache", cache); err == nil {
+			_ = git(dest, "fetch", "hb-cache", sc.Repo.BaseRef)
 		}
+	}
+	if err := git(dest, "checkout", "-f", "--detach", sc.Repo.BaseRef); err != nil {
+		return "", fmt.Errorf("checkout %s: %w", sc.Repo.BaseRef, err)
 	}
 	exclude := filepath.Join(dest, ".git", "info", "exclude")
 	_ = os.MkdirAll(filepath.Dir(exclude), 0o755)

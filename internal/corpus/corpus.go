@@ -25,6 +25,7 @@ type Acceptance struct {
 	SetupCommands []string `yaml:"setup_commands"`
 	TestCommands  []string `yaml:"test_commands"`
 	BuildCommands []string `yaml:"build_commands"`
+	FailToPass    []string `yaml:"fail_to_pass"`
 }
 
 type Scenario struct {
