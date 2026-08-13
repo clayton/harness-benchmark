@@ -9,7 +9,7 @@ curl -fsSL https://agentrodeo.dev/install.sh | sh
 hbench
 ```
 
-The installer is pinned to a release tag and checks a SHA-256. It puts `hb` in a directory already on your PATH when it can (Homebrew or `/usr/local/bin`). You should not need to edit a shell config. If it cannot, it prints one `export` line for that terminal.
+The installer is pinned to a release tag. Checksums live in the script itself. It puts `hbench` in a directory already on your PATH when it can (Homebrew or `/usr/local/bin`). If it cannot, it prints one `export … && hbench` line for that terminal and says so if it appends to your shell rc.
 
 `hbench` with no args prints **one** command. `hbench doctor` is the full report. Nothing spends tokens until you paste the printed command. The old `hb` name collided with Honeybadger's CLI, so the binary is `hbench`.
 

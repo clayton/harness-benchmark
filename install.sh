@@ -4,7 +4,7 @@
 # Read this file before piping it to sh.
 set -eu
 
-TAG="v0.3.0"
+TAG="v0.3.1"
 REPO="https://github.com/clayton/harness-benchmark"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -16,6 +16,17 @@ esac
 NAME="hbench-${OS}-${ARCH}"
 NEED_PATH=0
 OTHER_HB=""
+
+# Pinned in this script. GitHub hosts the binary; we do not fetch SUMS from it.
+expected_sha() {
+  case $1 in
+    hbench-darwin-amd64) echo "ab36a14111dee6c3e82af17103ec8fb7af2993fb3dc1bff22997b92822c1406b" ;;
+    hbench-darwin-arm64) echo "79473c688cbc66c207c2137952f4ae542cfc0e29a371617a89b47d9df5556471" ;;
+    hbench-linux-amd64) echo "8290867a4dc91ba5dd311e8c9ba98badf2b4055a92a40e7cc23c9d10c31d119e" ;;
+    hbench-linux-arm64) echo "ef6fbae11c5154acfe4fd6507f6eed3078ee2880587cef28130974b049556cc8" ;;
+    *) return 1 ;;
+  esac
+}
 
 on_path() {
   case ":$PATH:" in
@@ -145,11 +156,10 @@ fetch() {
 }
 
 install_from_release() {
+  want=$(expected_sha "$NAME") || return 1
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
-  fetch "$REPO/releases/download/$TAG/SHA256SUMS" "$tmp/SHA256SUMS" || return 1
   fetch "$REPO/releases/download/$TAG/$NAME" "$tmp/$NAME" || return 1
-  want=$(awk -v n="$NAME" '$2 == n { print $1; found=1 } END { exit !found }' "$tmp/SHA256SUMS") || return 1
   got=$(sha256_of "$tmp/$NAME") || return 1
   if [ "$want" != "$got" ]; then
     echo "hbench: checksum mismatch for $NAME" >&2
@@ -201,6 +211,7 @@ persist_path() {
   rc=$(rc_file)
   marker="# hbench (harness-benchmark)"
   if [ -f "$rc" ] && grep -F "$PREFIX" "$rc" >/dev/null 2>&1; then
+    echo "new terminals: $PREFIX is already listed in $rc"
     return
   fi
   {
@@ -208,6 +219,7 @@ persist_path() {
     echo "$marker"
     echo "export PATH=\"$PREFIX:\$PATH\""
   } >>"$rc"
+  echo "new terminals: appended PATH to $rc"
 }
 
 if ! install_from_release; then
@@ -221,12 +233,12 @@ if [ -x "$BIN" ]; then
 fi
 echo "installed $ver -> $BIN"
 if [ "$NEED_PATH" -eq 1 ]; then
-  echo "this terminal: export PATH=\"$PREFIX:\$PATH\""
   if [ -n "$OTHER_HB" ]; then
-    echo "note: another hbench is already $OTHER_HB; that export makes this one win"
+    echo "note: another hbench is already $OTHER_HB"
   fi
   persist_path
+  echo "this terminal: export PATH=\"$PREFIX:\$PATH\" && hbench"
 else
   echo "on PATH already"
+  echo "next: hbench"
 fi
-echo "next: hbench"
