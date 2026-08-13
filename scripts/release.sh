@@ -1,0 +1,30 @@
+#!/bin/sh
+# Build pinned hb binaries and SHA256SUMS for a GitHub release.
+# Usage: scripts/release.sh v0.2.2
+set -eu
+
+TAG=${1:?usage: scripts/release.sh v0.2.2}
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+OUT=${HB_RELEASE_DIR:-"$ROOT/dist/$TAG"}
+mkdir -p "$OUT"
+
+cd "$ROOT"
+for pair in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
+  os=${pair%/*}
+  arch=${pair#*/}
+  echo "building hb-${os}-${arch}"
+  CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -mod=mod -trimpath -ldflags="-s -w" -o "$OUT/hb-${os}-${arch}" ./cmd/hb
+done
+
+(
+  cd "$OUT"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 hb-*
+  else
+    sha256sum hb-*
+  fi
+) >"$OUT/SHA256SUMS"
+
+echo "assets in $OUT"
+cat "$OUT/SHA256SUMS"
+echo "next: gh release create $TAG --title \"hb ${TAG#v}\" $OUT/hb-* $OUT/SHA256SUMS"

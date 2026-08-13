@@ -34,7 +34,7 @@ func TestVersionSaysGo(t *testing.T) {
 	}
 }
 
-func TestBareDoctorPrintsOneSuggestedCommand(t *testing.T) {
+func TestBarePrintsOnlyTheSuggestedCommand(t *testing.T) {
 	t.Setenv("HB_DATA_DIR", t.TempDir())
 	cwd := t.TempDir()
 	if err := os.Chdir(cwd); err != nil {
@@ -42,17 +42,43 @@ func TestBareDoctorPrintsOneSuggestedCommand(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
 	out := capture(t, nil)
-	if !strings.Contains(out, "hb doctor") && !strings.Contains(out, "Suggested next step") {
+	if strings.Contains(out, "hb doctor") {
+		t.Fatalf("bare hb should not dump doctor:\n%s", out)
+	}
+	if strings.Contains(out, "Harnesses") {
+		t.Fatalf("bare hb should not list harnesses:\n%s", out)
+	}
+	if !strings.Contains(out, "hb run -s") {
+		t.Fatalf("bare hb should print one run command:\n%s", out)
+	}
+	if strings.Count(strings.TrimSpace(out), "\n") > 1 {
+		t.Fatalf("want one command line, got:\n%s", out)
+	}
+}
+
+func TestDoctorPrintsFullReport(t *testing.T) {
+	t.Setenv("HB_DATA_DIR", t.TempDir())
+	cwd := t.TempDir()
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
+	out := capture(t, []string{"doctor"})
+	if !strings.Contains(out, "hb doctor") {
 		t.Fatalf("missing doctor header:\n%s", out)
 	}
 	if !strings.Contains(out, "not attached") {
 		t.Fatalf("must say skills are not attached:\n%s", out)
 	}
-	if !strings.Contains(out, "Suggested next step") {
-		t.Fatalf("missing suggestion:\n%s", out)
-	}
 	if strings.Count(out, "Suggested next step") != 1 {
 		t.Fatalf("want one suggestion:\n%s", out)
+	}
+}
+
+func TestRunHelpExitsZero(t *testing.T) {
+	out := capture(t, []string{"run", "--help"})
+	if !strings.Contains(out, "hb run -s") {
+		t.Fatalf("run help:\n%s", out)
 	}
 }
 

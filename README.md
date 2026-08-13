@@ -15,7 +15,9 @@ export PATH="$HOME/.local/bin:$PATH"
 hb
 ```
 
-`hb` prints what it found on your machine and **one** command to paste. That first ride is a baseline (no extra skills). Nothing spends tokens until you paste it.
+The installer is pinned to a release tag and checks a SHA-256 before it leaves `hb` on disk. It also tries to add `~/.local/bin` to your shell startup file. New terminals still need that PATH if the write did not stick.
+
+`hb` with no args prints **one** command. `hb doctor` is the full report. Nothing spends tokens until you paste the printed command.
 
 After a ride:
 
@@ -93,7 +95,7 @@ Manual mode needs no API keys: prepare a workspace, run any agent yourself, `hb 
 ## 5-minute loop
 
 ```bash
-hb                         # doctor: one suggested command
+hb                         # one suggested command; hb doctor for the full report
 # paste what it prints, e.g.:
 hb run -s go-chi-tee-bytes-double-count --harness grok && hb execute
 
@@ -145,7 +147,8 @@ See [WISHLIST.md](./WISHLIST.md): Docker sandboxes, formal multi-adapter package
 
 | Command | Purpose |
 |---------|---------|
-| `hb` / `hb doctor` | Probe this machine and print one suggested first ride |
+| `hb` | Print one suggested command |
+| `hb doctor` | Probe this machine (harnesses, toolchains, skills) |
 | `hb version` | Print `hb <ver> (go)` |
 | `hb list scenarios` | Official corpus from the home cache |
 | `hb list runs` | Local runs in `./hb-out` |

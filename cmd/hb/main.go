@@ -15,7 +15,7 @@ import (
 	"github.com/clayton/harness-benchmark/internal/report"
 )
 
-const version = "0.2.1"
+const version = "0.2.2"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -26,7 +26,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return cmdDoctor()
+		return cmdSuggest()
 	}
 	switch args[0] {
 	case "version", "--version", "-v":
@@ -58,9 +58,11 @@ func usage() string {
 	return `hb — compare coding-agent systems on fixed official tasks.
 
 Commands:
-  hb                 doctor: what you have + one suggested command
+  hb                      print one suggested command
+  hb doctor               what this machine has
   hb version
   hb list scenarios
+  hb list runs
   hb run -s <id> --harness <name>
   hb execute [run_id]
   hb finish [run_id]
@@ -77,16 +79,37 @@ func ensureCorpus(l paths.Layout) error {
 	return corpus.EnsureCache(l.ScenariosDir())
 }
 
-func cmdDoctor() error {
+func probeSuggestion() (doctor.Suggestion, error) {
 	l := layout()
 	if err := ensureCorpus(l); err != nil {
-		return err
+		return doctor.Suggestion{}, err
 	}
 	cwd, _ := os.Getwd()
 	snap := doctor.Probe(doctor.LookPATH)
 	snap.SkillNames = doctor.ListSkills(doctor.DefaultSkillRoots(l.Home, cwd))
 	snap.Scenarios = corpus.DoctorScenarios(l.ScenariosDir())
-	fmt.Print(doctor.Format(doctor.Suggest(snap)))
+	return doctor.Suggest(snap), nil
+}
+
+func cmdSuggest() error {
+	sug, err := probeSuggestion()
+	if err != nil {
+		return err
+	}
+	if sug.Command == "" {
+		fmt.Println("hb doctor")
+		return nil
+	}
+	fmt.Println(sug.Command)
+	return nil
+}
+
+func cmdDoctor() error {
+	sug, err := probeSuggestion()
+	if err != nil {
+		return err
+	}
+	fmt.Print(doctor.Format(sug))
 	return nil
 }
 
@@ -126,14 +149,27 @@ func cmdList(args []string) error {
 
 func cmdRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	fs.Usage = func() {
+		fmt.Fprint(os.Stdout, `hb run -s <scenario> --harness <name>
+
+  -s, --scenario   official scenario id
+  --harness        grok, pi, claude, codex, or manual
+  --no-setup       skip setup commands
+`)
+	}
 	scenario := fs.String("s", "", "scenario id")
 	harness := fs.String("harness", "", "harness name")
 	noSetup := fs.Bool("no-setup", false, "skip setup commands")
 	fs.StringVar(scenario, "scenario", "", "scenario id")
 	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return nil
+		}
 		return err
 	}
 	if *scenario == "" || *harness == "" {
+		fs.Usage()
 		return fmt.Errorf("usage: hb run -s <scenario> --harness <name>")
 	}
 	l := layout()

@@ -48,6 +48,29 @@ func TestSuggestHeadlessUsesRunAndExecute(t *testing.T) {
 	}
 }
 
+func TestFormatPrepareDoesNotListEmptyHarnesses(t *testing.T) {
+	s := Snapshot{
+		Toolchains: map[string]bool{"node": true},
+		Scenarios: []Scenario{
+			{ID: "js-commander-negative-exp-E", Language: "javascript", Difficulty: "easy"},
+		},
+	}
+	got := Suggest(s)
+	if got.Kind != "prepare" {
+		t.Fatalf("kind=%s", got.Kind)
+	}
+	text := Format(got)
+	if strings.Contains(text, "Harnesses (headless):") || strings.Contains(text, "Harnesses (manual only):") {
+		t.Fatalf("should not list empty harness groups:\n%s", text)
+	}
+	if strings.Contains(text, "(none)\n") && strings.Contains(text, "Harnesses") {
+		t.Fatalf("should not say harnesses are none:\n%s", text)
+	}
+	if !strings.Contains(text, "only prepares a workspace") {
+		t.Fatalf("should say it prepares a workspace:\n%s", text)
+	}
+}
+
 func TestSuggestManualOnlyPreparesWorkspace(t *testing.T) {
 	s := Snapshot{
 		PathBins:   map[string]bool{"cursor": true, "node": true},

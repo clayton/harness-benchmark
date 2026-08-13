@@ -235,19 +235,20 @@ func hasTag(tags []string, want string) bool {
 func Format(s Suggestion) string {
 	var b strings.Builder
 	b.WriteString("hb doctor\n")
-	b.WriteString("\nHarnesses (headless):\n")
-	if len(s.Harnesses) == 0 {
-		b.WriteString("  (none)\n")
+	if len(s.Harnesses) > 0 {
+		b.WriteString("\nHarnesses (headless):\n")
+		for _, h := range s.Harnesses {
+			fmt.Fprintf(&b, "  %s\n", h.Name)
+		}
 	}
-	for _, h := range s.Harnesses {
-		fmt.Fprintf(&b, "  %s\n", h.Name)
+	if len(s.Manual) > 0 {
+		b.WriteString("\nHarnesses (manual only):\n")
+		for _, h := range s.Manual {
+			fmt.Fprintf(&b, "  %s\n", h.Name)
+		}
 	}
-	b.WriteString("\nHarnesses (manual only):\n")
-	if len(s.Manual) == 0 {
-		b.WriteString("  (none)\n")
-	}
-	for _, h := range s.Manual {
-		fmt.Fprintf(&b, "  %s\n", h.Name)
+	if len(s.Harnesses) == 0 && s.Kind == "prepare" {
+		b.WriteString("\nNo headless harness on PATH. The command below only prepares a workspace.\n")
 	}
 	b.WriteString("\nJudge toolchains:\n")
 	if len(s.Tools) == 0 {
@@ -265,7 +266,7 @@ func Format(s Suggestion) string {
 	}
 	b.WriteString("\nSuggested next step (paste to run; nothing has been executed):\n")
 	if s.Command == "" {
-		b.WriteString("  (none — install a judge toolchain or a headless harness)\n")
+		b.WriteString("  (none: install a judge toolchain or a headless harness)\n")
 	} else {
 		fmt.Fprintf(&b, "  %s\n", s.Command)
 	}
