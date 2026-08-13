@@ -846,5 +846,47 @@ def report(
         console.print(f"  artifacts → {results_href}/<run_id>/…")
 
 
+@app.command("rider")
+def rider_cmd(
+    action: str = typer.Argument("whoami", help="init | whoami"),
+) -> None:
+    """Create or show your Agent Rodeo rider token."""
+    from hb.rodeo import init_rider, load_rider, rider_path, rodeo_url
+
+    if action == "init":
+        data = init_rider()
+        console.print(f"[green]rider[/green] {data.get('display_name')}  slug={data.get('slug')}")
+        console.print(f"  token stored at {rider_path()}")
+        console.print(f"  rodeo {rodeo_url()}")
+        return
+    data = load_rider()
+    if not data:
+        console.print("No rider yet. Run [bold]hb rider init[/bold]")
+        raise typer.Exit(1)
+    console.print(f"{data.get('display_name')}  slug={data.get('slug')}")
+    console.print(f"  {rider_path()}")
+
+
+@app.command()
+def publish(
+    run_id: str = typer.Argument(..., help="Finished run id"),
+    root: Optional[Path] = typer.Option(None),
+) -> None:
+    """Push a finished run to Agent Rodeo (agentrodeo.dev)."""
+    from hb.loaders import ROOT
+    from hb.rodeo import publish_run, rodeo_url
+
+    root = root or ROOT
+    try:
+        result = publish_run(run_id, root)
+    except Exception as e:
+        console.print(f"[red]publish failed:[/red] {e}")
+        raise typer.Exit(1)
+    console.print(f"[green]Published[/green] {result.get('id')}  {result.get('url')}")
+    if result.get("unofficial"):
+        console.print("[yellow]unofficial[/yellow] — on your profile only, not the main board")
+    console.print(f"  rodeo {rodeo_url()}")
+
+
 if __name__ == "__main__":
     app()

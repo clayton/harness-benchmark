@@ -351,7 +351,9 @@ hb validate
 
 **v0 is usable for personal experiments.** Easy and harder scenarios smoked; headless pi/Grok execute with tokens/$; superpowers A/B; incomplete-spec + proxy; budget kill; experiment HTML with artifact links.
 
-Not a hosted product. Not SWE-bench-scale. Directional signal first.
+Community site (v1): [agentrodeo.dev](https://agentrodeo.dev) — `hb rider init` then `hb publish <run_id>`.
+
+Not SWE-bench-scale. Directional signal first.
 
 ---
 
