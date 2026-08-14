@@ -38,11 +38,12 @@ prompt: |
   the official hidden checks after you finish.
 
 acceptance:
-  setup_commands: []
+  setup_commands:
+    - "bundle check || bundle install"
+    - "bin/rails db:prepare"
   gold_files:
     - verification_test.rb
   test_commands:
-    - "command -v docker >/dev/null || { echo 'this pack judges in Docker: docker pull ghcr.io/evilmartians/lemans-writebook'; exit 1; }"
-    - "docker run --rm --network none -v \"$PWD:/app\" ghcr.io/evilmartians/lemans-writebook@sha256:4dc4939ded7381ed6006ca532c6e51da62844a868a5278d51a0827795d642b08 sh -c 'bin/rails test'"
+    - "bin/rails test"
   fail_to_pass:
     - "VerifierTest"
