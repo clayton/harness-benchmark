@@ -68,6 +68,35 @@ func TestOfficialChiYAMLHasGoldAndFailToPass(t *testing.T) {
 	}
 }
 
+func TestResolveLoadsOptionalPackYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "optional", "scenario.yaml")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := "id: pack-demo\ntitle: demo\nlanguage: ruby\nprompt: |\n  fix it\nrepo:\n  url: https://example.com/app.git\n  base_ref: abc\n  environment_patch: environment.patch\nacceptance:\n  gold_files:\n    - verification_test.rb\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sc, err := Resolve(t.TempDir(), dir, "pack-demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sc.SourceDir != filepath.Dir(path) {
+		t.Fatalf("SourceDir=%s", sc.SourceDir)
+	}
+	if sc.Repo.EnvironmentPatch != "environment.patch" {
+		t.Fatalf("patch=%q", sc.Repo.EnvironmentPatch)
+	}
+	if len(sc.Acceptance.GoldFiles) != 1 {
+		t.Fatalf("gold_files=%v", sc.Acceptance.GoldFiles)
+	}
+	sc2, err := LoadFile(path)
+	if err != nil || sc2.ID != "pack-demo" {
+		t.Fatalf("LoadFile: %+v %v", sc2, err)
+	}
+}
+
 func TestOfficialChiPromptDoesNotRequireAddedTest(t *testing.T) {
 	dir := t.TempDir()
 	if err := EnsureCache(dir); err != nil {

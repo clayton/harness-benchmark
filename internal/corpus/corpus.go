@@ -16,9 +16,10 @@ import (
 var embedded embed.FS
 
 type Repo struct {
-	URL     string `yaml:"url"`
-	BaseRef string `yaml:"base_ref"`
-	GoldRef string `yaml:"gold_ref"`
+	URL              string `yaml:"url"`
+	BaseRef          string `yaml:"base_ref"`
+	GoldRef          string `yaml:"gold_ref"`
+	EnvironmentPatch string `yaml:"environment_patch"`
 }
 
 type Acceptance struct {
@@ -26,6 +27,7 @@ type Acceptance struct {
 	TestCommands  []string `yaml:"test_commands"`
 	BuildCommands []string `yaml:"build_commands"`
 	FailToPass    []string `yaml:"fail_to_pass"`
+	GoldFiles     []string `yaml:"gold_files"`
 }
 
 type Scenario struct {
@@ -39,6 +41,7 @@ type Scenario struct {
 	Difficulty  string     `yaml:"difficulty"`
 	Repo        Repo       `yaml:"repo"`
 	Acceptance  Acceptance `yaml:"acceptance"`
+	SourceDir   string     `yaml:"-"`
 }
 
 func (s Scenario) ToDoctor() doctor.Scenario {
@@ -82,6 +85,9 @@ func Load(dir string) ([]Scenario, error) {
 	if err != nil {
 		return nil, err
 	}
+	if nested, err := filepath.Glob(filepath.Join(dir, "*", "*.yaml")); err == nil {
+		matches = append(matches, nested...)
+	}
 	var out []Scenario
 	for _, path := range matches {
 		if strings.Contains(filepath.Base(path), "example-synthetic") {
@@ -98,6 +104,7 @@ func Load(dir string) ([]Scenario, error) {
 		if s.ID == "" {
 			continue
 		}
+		s.SourceDir = filepath.Dir(path)
 		out = append(out, s)
 	}
 	return out, nil
@@ -114,6 +121,32 @@ func Find(dir, id string) (Scenario, error) {
 		}
 	}
 	return Scenario{}, fmt.Errorf("scenario not found: %s", id)
+}
+
+func LoadFile(path string) (Scenario, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return Scenario{}, err
+	}
+	var s Scenario
+	if err := yaml.Unmarshal(raw, &s); err != nil {
+		return Scenario{}, fmt.Errorf("%s: %w", path, err)
+	}
+	if s.ID == "" {
+		return Scenario{}, fmt.Errorf("%s: missing id", path)
+	}
+	s.SourceDir = filepath.Dir(path)
+	return s, nil
+}
+
+func Resolve(officialDir, from, idOrPath string) (Scenario, error) {
+	if idOrPath != "" && (strings.HasSuffix(idOrPath, ".yaml") || strings.HasSuffix(idOrPath, ".yml") || strings.Contains(idOrPath, string(filepath.Separator))) {
+		return LoadFile(idOrPath)
+	}
+	if from != "" {
+		return Find(from, idOrPath)
+	}
+	return Find(officialDir, idOrPath)
 }
 
 func DoctorScenarios(dir string) []doctor.Scenario {

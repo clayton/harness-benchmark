@@ -41,16 +41,24 @@ func Finish(l paths.Layout, id string, sc corpus.Scenario, wallMS int, notes str
 	}
 
 	var restore func()
-	if sc.Repo.GoldRef != "" {
+	var applied []string
+	var oerr error
+	var backups map[string]*string
+	switch {
+	case sc.Repo.GoldRef != "":
 		cache, cerr := ensureRepo(l, sc)
 		if cerr != nil {
 			return rec, fmt.Errorf("gold cache: %w", cerr)
 		}
-		applied, backups, oerr := overlayGoldTests(cache, rec.Worktree, sc)
-		if oerr != nil {
-			restoreOverlays(rec.Worktree, backups)
-			return rec, fmt.Errorf("gold overlay: %w", oerr)
-		}
+		applied, backups, oerr = overlayGoldTests(cache, rec.Worktree, sc)
+	case len(sc.Acceptance.GoldFiles) > 0:
+		applied, backups, oerr = overlayLocalGold(rec.Worktree, sc)
+	}
+	if oerr != nil {
+		restoreOverlays(rec.Worktree, backups)
+		return rec, fmt.Errorf("gold overlay: %w", oerr)
+	}
+	if applied != nil || backups != nil {
 		restore = func() { restoreOverlays(rec.Worktree, backups) }
 		_ = os.WriteFile(filepath.Join(l.RunDir(id), "judge-gold-overlay.txt"), []byte(strings.Join(applied, "\n")+"\n"), 0o644)
 		note := fmt.Sprintf("Applied %d gold test file(s): %s", len(applied), strings.Join(applied, ", "))
@@ -128,6 +136,44 @@ func listGoldTestFiles(cache string, sc corpus.Scenario) []string {
 		}
 	}
 	return paths
+}
+
+func overlayLocalGold(worktree string, sc corpus.Scenario) ([]string, map[string]*string, error) {
+	if sc.SourceDir == "" {
+		return nil, nil, fmt.Errorf("gold_files set but scenario has no source dir")
+	}
+	backups := map[string]*string{}
+	var applied []string
+	for _, rel := range sc.Acceptance.GoldFiles {
+		rel = strings.TrimSpace(rel)
+		if rel == "" {
+			continue
+		}
+		src := filepath.Join(sc.SourceDir, rel)
+		content, err := os.ReadFile(src)
+		if err != nil {
+			return applied, backups, fmt.Errorf("gold file %s: %w", src, err)
+		}
+		destRel := rel
+		if !strings.Contains(rel, "/") && strings.HasSuffix(rel, ".rb") {
+			destRel = filepath.Join("test", "hb_"+rel)
+		}
+		target := filepath.Join(worktree, filepath.FromSlash(destRel))
+		if raw, err := os.ReadFile(target); err == nil {
+			s := string(raw)
+			backups[destRel] = &s
+		} else {
+			backups[destRel] = nil
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return applied, backups, err
+		}
+		if err := os.WriteFile(target, content, 0o644); err != nil {
+			return applied, backups, err
+		}
+		applied = append(applied, destRel)
+	}
+	return applied, backups, nil
 }
 
 func overlayGoldTests(cache, worktree string, sc corpus.Scenario) ([]string, map[string]*string, error) {

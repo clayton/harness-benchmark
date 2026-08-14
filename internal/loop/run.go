@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -12,10 +13,17 @@ import (
 )
 
 func CreateRun(l paths.Layout, sc corpus.Scenario, harness string, runSetup bool) (RunRecord, error) {
+	return CreateRunWithModel(l, sc, harness, "", runSetup)
+}
+
+func CreateRunWithModel(l paths.Layout, sc corpus.Scenario, harness, model string, runSetup bool) (RunRecord, error) {
 	id := NewID()
 	wt, err := PrepareWorktree(l, sc, id, runSetup)
 	if err != nil {
 		return RunRecord{}, err
+	}
+	if model == "" {
+		model = defaultModel(harness)
 	}
 	sum := sha256.Sum256([]byte(stringsTrim(sc.Prompt)))
 	rec := RunRecord{
@@ -25,7 +33,7 @@ func CreateRun(l paths.Layout, sc corpus.Scenario, harness string, runSetup bool
 		Status:     "pending",
 		Worktree:   wt,
 		Harness:    harness,
-		Model:      defaultModel(harness),
+		Model:      model,
 		Metadata: map[string]any{
 			"workflow":         "baseline",
 			"interaction":      "unattended",
@@ -71,6 +79,8 @@ func defaultModel(harness string) string {
 		return "claude-sonnet-4"
 	case "codex":
 		return "gpt-5"
+	case "cursor":
+		return "composer-2.5"
 	default:
 		return ""
 	}
@@ -87,18 +97,112 @@ func stringsTrim(s string) string {
 }
 
 func HeadlessCommand(harness string) string {
+	return HeadlessLaunch(harness, "")
+}
+
+func HeadlessLaunch(harness, model string) string {
 	switch harness {
 	case "grok":
-		return "grok --always-approve --max-turns 80 --output-format json --permission-mode bypassPermissions --prompt-file HB_PROMPT.txt"
+		cmd := "grok --always-approve --max-turns 80 --output-format json --permission-mode bypassPermissions --prompt-file HB_PROMPT.txt"
+		if model != "" {
+			cmd = "grok -m " + shellTok(model) + " --always-approve --max-turns 80 --output-format json --permission-mode bypassPermissions --prompt-file HB_PROMPT.txt"
+		}
+		return cmd
 	case "pi":
-		return `pi -p --mode json --approve --no-session --no-extensions --no-skills "$(cat HB_PROMPT.txt)"`
+		cmd := `pi -p --mode json --approve --no-session --no-extensions --no-skills`
+		provider, mid := splitPiModel(model)
+		if provider != "" {
+			cmd += " --provider " + shellTok(provider)
+		}
+		if mid != "" {
+			cmd += " --model " + shellTok(mid)
+		}
+		cmd += ` --append-system-prompt "UNATTENDED BENCHMARK MODE: Do not ask the user any questions. The task is fully specified in the user message. Work only in the current working directory. Do not create git worktrees outside this directory. Implement the fix, verify, then stop." "$(cat HB_PROMPT.txt)"`
+		return cmd
 	case "claude":
 		return `claude -p --output-format json --dangerously-skip-permissions "$(cat HB_PROMPT.txt)"`
 	case "codex":
 		return `codex exec --skip-git-repo-check "$(cat HB_PROMPT.txt)"`
+	case "cursor":
+		mid := model
+		if mid == "" {
+			mid = "composer-2.5"
+		}
+		return "cursor-agent -p --output-format text --force --model " + shellTok(mid) + ` "$(cat HB_PROMPT.txt)"`
 	default:
 		return ""
 	}
+}
+
+func splitPiModel(model string) (provider, id string) {
+	model = stringsTrim(model)
+	if model == "" {
+		return "", ""
+	}
+	if i := indexByte(model, '/'); i >= 0 {
+		left, right := model[:i], model[i+1:]
+		if left == "x-ai" || left == "openrouter" {
+			return "openrouter", model
+		}
+		return left, right
+	}
+	if len(model) >= 4 && model[:4] == "grok" {
+		return "xai", model
+	}
+	return "", model
+}
+
+func indexByte(s string, c byte) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == c {
+			return i
+		}
+	}
+	return -1
+}
+
+func shellTok(s string) string {
+	if s == "" {
+		return s
+	}
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if !(ch == '-' || ch == '.' || ch == '_' || ch == '/' || ch == ':' ||
+			ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9') {
+			return "'" + s + "'"
+		}
+	}
+	return s
+}
+
+func ScenarioForRun(l paths.Layout, officialDir, id string) (corpus.Scenario, error) {
+	rec, err := Load(l, id)
+	if err != nil {
+		return corpus.Scenario{}, err
+	}
+	if rec.ScenarioID != "" {
+		if sc, err := corpus.Find(officialDir, rec.ScenarioID); err == nil {
+			return sc, nil
+		}
+	}
+	return scenarioFromSnapshot(l, id)
+}
+
+func scenarioFromSnapshot(l paths.Layout, id string) (corpus.Scenario, error) {
+	raw, err := os.ReadFile(filepath.Join(l.RunDir(id), "snapshot.json"))
+	if err != nil {
+		return corpus.Scenario{}, fmt.Errorf("scenario not found for run %s", id)
+	}
+	var snap struct {
+		Scenario corpus.Scenario `json:"scenario"`
+	}
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		return corpus.Scenario{}, err
+	}
+	if snap.Scenario.ID == "" {
+		return corpus.Scenario{}, fmt.Errorf("scenario not found for run %s", id)
+	}
+	return snap.Scenario, nil
 }
 
 func ResolveRunID(l paths.Layout, id string) (string, error) {

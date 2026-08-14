@@ -194,13 +194,17 @@ func cmdRun(args []string) error {
 	fs.Usage = func() {
 		fmt.Fprint(os.Stdout, `hbench run -s <scenario> --harness <name>
 
-  -s, --scenario   official scenario id
-  --harness        grok, pi, claude, codex, or manual
+  -s, --scenario   official scenario id, or a path to a .yaml
+  --from           extra directory of scenario YAML (optional packs)
+  --harness        grok, pi, claude, codex, cursor, or manual
+  --model          model id (pi: grok-4.6 uses xAI; x-ai/grok-4.6 uses OpenRouter)
   --no-setup       skip setup commands
 `)
 	}
 	scenario := fs.String("s", "", "scenario id")
+	from := fs.String("from", "", "extra scenario directory")
 	harness := fs.String("harness", "", "harness name")
+	model := fs.String("model", "", "model id")
 	noSetup := fs.Bool("no-setup", false, "skip setup commands")
 	fs.StringVar(scenario, "scenario", "", "scenario id")
 	if err := fs.Parse(args); err != nil {
@@ -217,16 +221,19 @@ func cmdRun(args []string) error {
 	if err := ensureCorpus(l); err != nil {
 		return err
 	}
-	sc, err := corpus.Find(l.ScenariosDir(), *scenario)
+	sc, err := corpus.Resolve(l.ScenariosDir(), *from, *scenario)
 	if err != nil {
 		return err
 	}
-	rec, err := loop.CreateRun(l, sc, *harness, !*noSetup)
+	rec, err := loop.CreateRunWithModel(l, sc, *harness, *model, !*noSetup)
 	if err != nil {
 		return err
 	}
 	fmt.Printf("Run created %s\n", rec.ID)
 	fmt.Printf("  status:    %s\n", rec.Status)
+	if rec.Model != "" {
+		fmt.Printf("  model:     %s\n", rec.Model)
+	}
 	fmt.Printf("  workspace: %s\n", rec.Worktree)
 	fmt.Printf("  prompt:    %s\n", filepath.Join(rec.Worktree, "HB_PROMPT.txt"))
 	if loop.HeadlessCommand(*harness) != "" {
@@ -271,7 +278,7 @@ func cmdExecute(args []string) error {
 	if err := ensureCorpus(l); err != nil {
 		return err
 	}
-	sc, ferr := corpus.Find(l.ScenariosDir(), rec.ScenarioID)
+	sc, ferr := loop.ScenarioForRun(l, l.ScenariosDir(), id)
 	if ferr != nil {
 		return ferr
 	}
@@ -313,7 +320,7 @@ func cmdFinish(args []string) error {
 		printScored(l, rec, true)
 		return nil
 	}
-	sc, err := corpus.Find(l.ScenariosDir(), rec.ScenarioID)
+	sc, err := loop.ScenarioForRun(l, l.ScenariosDir(), rec.ID)
 	if err != nil {
 		return err
 	}

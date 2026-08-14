@@ -21,7 +21,7 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	if err != nil {
 		return ExecResult{}, err
 	}
-	cmdLine := HeadlessCommand(rec.Harness)
+	cmdLine := HeadlessLaunch(rec.Harness, rec.Model)
 	if cmdLine == "" {
 		return ExecResult{}, fmt.Errorf("%s has no headless launch; stay in this directory and run: hbench finish %s", rec.Harness, id)
 	}

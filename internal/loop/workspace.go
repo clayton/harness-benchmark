@@ -101,6 +101,9 @@ func PrepareWorktree(l paths.Layout, sc corpus.Scenario, runID string, runSetup 
 	if err := git(dest, "checkout", "-f", "--detach", sc.Repo.BaseRef); err != nil {
 		return "", fmt.Errorf("checkout %s: %w", sc.Repo.BaseRef, err)
 	}
+	if err := applyEnvironmentPatch(dest, sc); err != nil {
+		return "", err
+	}
 	exclude := filepath.Join(dest, ".git", "info", "exclude")
 	_ = os.MkdirAll(filepath.Dir(exclude), 0o755)
 	_ = os.WriteFile(exclude, []byte("HB_PROMPT.txt\nHB_RUN.md\nHB_LAUNCH.md\n"), 0o644)
@@ -119,6 +122,32 @@ func PrepareWorktree(l paths.Layout, sc corpus.Scenario, runID string, runSetup 
 		}
 	}
 	return dest, nil
+}
+
+func applyEnvironmentPatch(dest string, sc corpus.Scenario) error {
+	rel := strings.TrimSpace(sc.Repo.EnvironmentPatch)
+	if rel == "" {
+		return nil
+	}
+	if sc.SourceDir == "" {
+		return fmt.Errorf("environment_patch set but scenario has no source dir")
+	}
+	patch := filepath.Join(sc.SourceDir, rel)
+	if _, err := os.Stat(patch); err != nil {
+		return fmt.Errorf("environment patch %s: %w", patch, err)
+	}
+	_ = git(dest, "config", "user.email", "hbench@local")
+	_ = git(dest, "config", "user.name", "hbench")
+	if err := git(dest, "apply", "--whitespace=nowarn", patch); err != nil {
+		return fmt.Errorf("apply environment patch: %w", err)
+	}
+	if err := git(dest, "add", "-A"); err != nil {
+		return err
+	}
+	if err := git(dest, "commit", "--no-verify", "-m", "hbench: seed environment"); err != nil {
+		return fmt.Errorf("commit environment patch: %w", err)
+	}
+	return nil
 }
 
 func gitDiff(worktree string) (string, error) {

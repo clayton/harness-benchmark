@@ -108,6 +108,10 @@ func TestHeadlessCommandKnownHarnesses(t *testing.T) {
 	if HeadlessCommand("manual") != "" {
 		t.Fatal("manual must not have headless launch")
 	}
+	got := HeadlessLaunch("pi", "grok-4.6")
+	if !strings.Contains(got, "--provider xai") || !strings.Contains(got, "--model grok-4.6") {
+		t.Fatalf("pi grok-4.6 launch: %s", got)
+	}
 }
 
 func gitOutput(t *testing.T, dir string, args ...string) string {
@@ -306,6 +310,82 @@ func TestPrepareWorktreeOfficialChiHasSourceFiles(t *testing.T) {
 		if info.Size() == 0 {
 			t.Fatalf("official chi %s is empty", rel)
 		}
+	}
+}
+
+func TestOverlayLocalGoldAndEnvironmentPatch(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	src := filepath.Join(home, "src")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, src)
+	sha := os.Getenv("HB_TEST_SHA")
+	if err := os.WriteFile(filepath.Join(src, "app.sh"), []byte("echo seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "diff", "--no-ext-diff", "app.sh")
+	cmd.Dir = src
+	patchBytes, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "app.sh"), []byte("echo hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pack := t.TempDir()
+	if err := os.WriteFile(filepath.Join(pack, "environment.patch"), patchBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pack, "verification_test.rb"), []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	l := paths.New(home, cwd)
+	l.DataDir = filepath.Join(home, "data")
+	sc := corpus.Scenario{
+		ID:        "pack-demo",
+		Title:     "seed",
+		Prompt:    "fix it",
+		SourceDir: pack,
+		Repo:      corpus.Repo{URL: src, BaseRef: sha, EnvironmentPatch: "environment.patch"},
+		Acceptance: corpus.Acceptance{
+			GoldFiles:    []string{"verification_test.rb"},
+			TestCommands: []string{"true"},
+		},
+	}
+	rec, err := CreateRun(l, sc, "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed, err := os.ReadFile(filepath.Join(rec.Worktree, "app.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(seed), "echo seed") {
+		t.Fatalf("environment patch not seeded: %q", seed)
+	}
+	if err := os.WriteFile(filepath.Join(rec.Worktree, "app.sh"), []byte("echo bye\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := Finish(l, rec.ID, sc, 5, "pack", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finished.Status != "completed" {
+		t.Fatalf("status=%s judges=%+v", finished.Status, finished.Judges)
+	}
+	diff, err := os.ReadFile(filepath.Join(l.RunDir(rec.ID), "patch.diff"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(diff), "echo seed") && strings.Contains(string(diff), "echo hi") {
+		t.Fatalf("published diff should be vs seeded HEAD, got:\n%s", diff)
+	}
+	if _, err := os.Stat(filepath.Join(rec.Worktree, "test", "hb_verification_test.rb")); err == nil {
+		t.Fatal("gold file should be restored off the worktree after judge")
 	}
 }
 

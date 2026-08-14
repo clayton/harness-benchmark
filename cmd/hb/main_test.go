@@ -251,7 +251,7 @@ func TestFinishFromWorkspaceFindsAncestorRun(t *testing.T) {
 	if strings.Contains(err.Error(), "run not found") {
 		t.Fatalf("should resolve the run from the workspace ancestor hb-out: %v", err)
 	}
-	if !strings.Contains(err.Error(), "scenario not found: does-not-exist") {
+	if !strings.Contains(err.Error(), "scenario not found") {
 		t.Fatalf("should load the ancestor run: %v", err)
 	}
 }
