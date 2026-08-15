@@ -40,11 +40,14 @@ type JudgeScore struct {
 }
 
 type Telemetry struct {
-	WallMS       int      `json:"wall_ms,omitempty"`
-	TokensIn     *int     `json:"tokens_in"`
-	TokensOut    *int     `json:"tokens_out"`
-	EstimatedUSD *float64 `json:"estimated_usd"`
-	Turns        *int     `json:"turns"`
+	WallMS           int      `json:"wall_ms,omitempty"`
+	TokensIn         *int     `json:"tokens_in"`
+	TokensOut        *int     `json:"tokens_out"`
+	EstimatedUSD     *float64 `json:"estimated_usd"`
+	Turns            *int     `json:"turns"`
+	ReasoningTokens  *int     `json:"reasoning_tokens,omitempty"`
+	CacheReadTokens  *int     `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *int     `json:"cache_write_tokens,omitempty"`
 }
 
 func NewID() string {

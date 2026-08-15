@@ -36,7 +36,6 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	if err != nil {
 		return ExecResult{}, err
 	}
-	defer logF.Close()
 
 	cmd := exec.Command("sh", "-c", cmdLine)
 	cmd.Dir = rec.Worktree
@@ -45,6 +44,7 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	start := time.Now()
 	err = cmd.Start()
 	if err != nil {
+		_ = logF.Close()
 		rec.Status = "failed"
 		rec.Error = err.Error()
 		_ = Save(l, rec)
@@ -60,6 +60,15 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 		waitErr = fmt.Errorf("timeout after %s", timeout)
 	}
 	wall := int(time.Since(start).Milliseconds())
+	closeErr := logF.Close()
+	rec.Telemetry = ExtractTelemetry(rec.Harness, logPath)
+	rec.Telemetry.WallMS = wall
+	if saveErr := Save(l, rec); saveErr != nil && waitErr == nil {
+		waitErr = saveErr
+	}
+	if closeErr != nil && waitErr == nil {
+		waitErr = closeErr
+	}
 	rc := 0
 	if waitErr != nil {
 		if cmd.ProcessState != nil {
