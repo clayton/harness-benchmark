@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -61,6 +62,9 @@ func Validate(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath
 }
 
 func checkout(repoURL, ref string) (string, func(), error) {
+	if err := validateCheckout(repoURL, ref); err != nil {
+		return "", func() {}, err
+	}
 	dir, err := os.MkdirTemp("", "hbench-controlled-")
 	if err != nil {
 		return "", func() {}, err
@@ -68,7 +72,13 @@ func checkout(repoURL, ref string) (string, func(), error) {
 	cleanup := func() { _ = os.RemoveAll(dir) }
 	commands := [][]string{{"init", "-q"}, {"remote", "add", "origin", repoURL}, {"fetch", "--depth=1", "origin", ref}, {"checkout", "-q", "--detach", "FETCH_HEAD"}, {"remote", "remove", "origin"}}
 	for _, args := range commands {
-		command := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		filePolicy := "never"
+		if os.Getenv("HB_CONTROLLED_ALLOW_LOCAL_REPO") == "1" {
+			filePolicy = "always"
+		}
+		gitArgs := []string{"-c", "credential.helper=", "-c", "protocol.file.allow=" + filePolicy, "-C", dir}
+		command := exec.Command("git", append(gitArgs, args...)...)
+		command.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never", "GIT_ASKPASS=true")
 		if output, err := command.CombinedOutput(); err != nil {
 			cleanup()
 			return "", func() {}, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, output)
@@ -77,9 +87,22 @@ func checkout(repoURL, ref string) (string, func(), error) {
 	return dir, cleanup, nil
 }
 
+func validateCheckout(repoURL, ref string) error {
+	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(ref) {
+		return fmt.Errorf("controlled checkout ref must be a full lowercase commit hash")
+	}
+	if strings.HasPrefix(repoURL, "https://github.com/") {
+		return nil
+	}
+	if os.Getenv("HB_CONTROLLED_ALLOW_LOCAL_REPO") == "1" && filepath.IsAbs(repoURL) {
+		return nil
+	}
+	return fmt.Errorf("controlled repository must use https://github.com/")
+}
+
 func prepareAndEvaluate(ctx context.Context, workspace string, scenario corpus.Scenario, pack Pack, packPath string) (bool, string, error) {
 	if len(scenario.Acceptance.SetupCommands) > 0 {
-		if output, err := dockerRun(ctx, "bridge", workspace, "", pack.EnvironmentImageDigest, scenario.Acceptance.SetupCommands, nil); err != nil {
+		if output, err := dockerRun(ctx, "none", workspace, "", pack.EnvironmentImageDigest, scenario.Acceptance.SetupCommands, nil); err != nil {
 			return false, string(output), fmt.Errorf("dependency preparation failed: %w: %s", err, output)
 		}
 	}
@@ -88,7 +111,8 @@ func prepareAndEvaluate(ctx context.Context, workspace string, scenario corpus.S
 }
 
 func dockerRun(ctx context.Context, network, workspace, evaluator, image string, commands []string, environment map[string]string) ([]byte, error) {
-	args := []string{"run", "--rm", "--network", network, "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "512", "--memory", "4g", "--cpus", "4", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1g", "-v", workspace + ":/workspace", "-w", "/workspace"}
+	name := "hbench-job-" + newID("")
+	args := []string{"run", "--rm", "--name", name, "--network", network, "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "512", "--memory", "4g", "--cpus", "4", "--tmpfs", "/tmp:rw,noexec,nosuid,size=1g", "-v", workspace + ":/workspace", "-w", "/workspace"}
 	if evaluator != "" {
 		absolute, _ := filepath.Abs(evaluator)
 		args = append(args, "-v", absolute+":/evaluator:ro")
@@ -98,6 +122,7 @@ func dockerRun(ctx context.Context, network, workspace, evaluator, image string,
 	}
 	args = append(args, image, "sh", "-lc", "set -eu\n"+strings.Join(commands, "\n"))
 	command := exec.CommandContext(ctx, "docker", args...)
+	defer func() { _, _ = commandOutput(context.Background(), "docker", "rm", "-f", name) }()
 	return command.CombinedOutput()
 }
 

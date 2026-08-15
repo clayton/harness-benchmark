@@ -33,7 +33,7 @@ func Publish(l paths.Layout, id string, client *http.Client) (map[string]any, er
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
-	rec, err := loop.Load(l, id)
+	payload, err := BuildPayload(l, id)
 	if err != nil {
 		return nil, err
 	}
@@ -41,11 +41,6 @@ func Publish(l paths.Layout, id string, client *http.Client) (map[string]any, er
 	if err != nil {
 		return nil, err
 	}
-	snap := map[string]any{}
-	if raw, err := os.ReadFile(filepath.Join(l.RunDir(id), "snapshot.json")); err == nil {
-		_ = json.Unmarshal(raw, &snap)
-	}
-	payload := map[string]any{"run": rec, "snapshot": snap}
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequest(http.MethodPost, RodeoURL()+"/api/v1/runs", bytes.NewReader(body))
 	if err != nil {
@@ -65,6 +60,52 @@ func Publish(l paths.Layout, id string, client *http.Client) (map[string]any, er
 	var out map[string]any
 	_ = json.Unmarshal(raw, &out)
 	return out, nil
+}
+
+// BuildPayload constructs the public hb.publish.v1 DTO. It deliberately does
+// not serialize RunRecord or the scenario snapshot wholesale: those contain
+// local paths, prompts, commands, errors, notes, and extension metadata.
+func BuildPayload(l paths.Layout, id string) (map[string]any, error) {
+	rec, err := loop.Load(l, id)
+	if err != nil {
+		return nil, err
+	}
+	judges := make([]map[string]any, 0, len(rec.Judges))
+	for _, judge := range rec.Judges {
+		judges = append(judges, map[string]any{"name": judge.Name, "score": judge.Score, "passed": judge.Passed})
+	}
+	telemetry := map[string]any{
+		"wall_ms": rec.Telemetry.WallMS, "tokens_in": rec.Telemetry.TokensIn,
+		"tokens_out": rec.Telemetry.TokensOut, "estimated_usd": rec.Telemetry.EstimatedUSD,
+		"turns": rec.Telemetry.Turns, "reasoning_tokens": rec.Telemetry.ReasoningTokens,
+		"cache_read_tokens": rec.Telemetry.CacheReadTokens, "cache_write_tokens": rec.Telemetry.CacheWriteTokens,
+		"total_tokens": rec.Telemetry.TotalTokens,
+	}
+	workflow, _ := rec.Metadata["workflow"].(string)
+	interaction, _ := rec.Metadata["interaction"].(string)
+	run := map[string]any{
+		"id": rec.ID, "scenario_id": rec.ScenarioID, "config_id": rec.ConfigID,
+		"status": rec.Status, "harness": rec.Harness, "harness_version": rec.HarnessVersion,
+		"model": rec.Model, "judges": judges, "telemetry": telemetry,
+		"metadata": map[string]any{"workflow": workflow, "interaction": interaction},
+	}
+	snapshot := map[string]any{}
+	if raw, readErr := os.ReadFile(filepath.Join(l.RunDir(id), "snapshot.json")); readErr == nil {
+		var source map[string]any
+		if json.Unmarshal(raw, &source) == nil {
+			snapshot["prompt_sha256_16"] = source["prompt_sha256_16"]
+			if repo, ok := source["repo"].(map[string]any); ok {
+				snapshot["repo"] = map[string]any{"base_ref": repo["base_ref"], "gold_ref": repo["gold_ref"]}
+			}
+			if config, ok := source["config"].(map[string]any); ok {
+				snapshot["config"] = map[string]any{
+					"id": config["id"], "harness": config["harness"], "model": config["model"],
+					"workflow": config["workflow"], "skills": config["skills"], "interaction": config["interaction"],
+				}
+			}
+		}
+	}
+	return map[string]any{"schema": "hb.publish.v1", "run": run, "snapshot": snapshot}, nil
 }
 
 func ensureRider(client *http.Client) (map[string]any, error) {

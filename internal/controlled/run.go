@@ -53,42 +53,64 @@ func Run(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath, rel
 	}
 	defer cleanupWorkspace()
 	if len(scenario.Acceptance.SetupCommands) > 0 {
-		if output, err := dockerRun(ctx, "bridge", workspace, "", pack.EnvironmentImageDigest, scenario.Acceptance.SetupCommands, nil); err != nil {
+		if output, err := dockerRun(ctx, "none", workspace, "", pack.EnvironmentImageDigest, scenario.Acceptance.SetupCommands, nil); err != nil {
 			return RunResult{}, fmt.Errorf("dependency preparation failed: %w: %s", err, output)
 		}
 	}
 
 	runID := newID("controlled")
 	network := "hbench-" + strings.ReplaceAll(runID, "_", "-")
+	egressNetwork := network + "-egress"
 	relay := network + "-relay"
 	if output, err := commandOutput(ctx, "docker", "network", "create", "--internal", network); err != nil {
 		return RunResult{}, fmt.Errorf("create isolated network: %w: %s", err, output)
 	}
 	defer func() { _, _ = commandOutput(context.Background(), "docker", "network", "rm", network) }()
+	if output, err := commandOutput(ctx, "docker", "network", "create", egressNetwork); err != nil {
+		return RunResult{}, fmt.Errorf("create relay egress network: %w: %s", err, output)
+	}
+	defer func() { _, _ = commandOutput(context.Background(), "docker", "network", "rm", egressNetwork) }()
 
-	relayArgs := []string{"run", "-d", "--rm", "--name", relay, "--network", network,
-		"--cap-drop", "ALL", "--security-opt", "no-new-privileges", "-e", "UPSTREAM=" + pack.Relay.Upstream,
+	secretDir, err := os.MkdirTemp("", "hbench-relay-secrets-")
+	if err != nil {
+		return RunResult{}, err
+	}
+	defer os.RemoveAll(secretDir)
+	tokenBytes := make([]byte, 24)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return RunResult{}, err
+	}
+	clientToken := hex.EncodeToString(tokenBytes)
+	if err := os.WriteFile(filepath.Join(secretDir, "provider"), []byte(secret), 0o600); err != nil {
+		return RunResult{}, err
+	}
+	if err := os.WriteFile(filepath.Join(secretDir, "client-token"), []byte(clientToken), 0o600); err != nil {
+		return RunResult{}, err
+	}
+
+	relayArgs := []string{"run", "-d", "--rm", "--name", relay, "--network", egressNetwork,
+		"--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "64", "--memory", "256m", "--cpus", "1", "--tmpfs", "/tmp:rw,noexec,nosuid,size=32m",
+		"-v", secretDir + ":/run/secrets:ro", "-e", "UPSTREAM=" + pack.Relay.Upstream,
 		"-e", "AUTH_HEADER=" + pack.Relay.AuthHeader, "-e", "AUTH_SCHEME=" + pack.Relay.AuthScheme,
-		"-e", "AUTH_VALUE", relayImage}
+		"-e", "AUTH_FILE=/run/secrets/provider", "-e", "CLIENT_TOKEN_FILE=/run/secrets/client-token", relayImage}
 	relayCommand := exec.CommandContext(ctx, "docker", relayArgs...)
-	relayCommand.Env = append(os.Environ(), "AUTH_VALUE="+secret)
 	if output, err := relayCommand.CombinedOutput(); err != nil {
 		return RunResult{}, fmt.Errorf("start credential relay: %w: %s", err, output)
 	}
 	defer func() { _, _ = commandOutput(context.Background(), "docker", "rm", "-f", relay) }()
-	if output, err := commandOutput(ctx, "docker", "network", "connect", "bridge", relay); err != nil {
-		return RunResult{}, fmt.Errorf("connect credential relay egress: %w: %s", err, output)
+	if output, err := commandOutput(ctx, "docker", "network", "connect", network, relay); err != nil {
+		return RunResult{}, fmt.Errorf("connect credential relay to agent network: %w: %s", err, output)
 	}
-	time.Sleep(500 * time.Millisecond)
+	if err := waitForHealthy(ctx, relay); err != nil {
+		return RunResult{}, err
+	}
 
 	environment := map[string]string{}
 	for key, value := range pack.Execution.Environment {
 		environment[key] = value
 	}
 	environment[pack.Relay.BaseURLEnv] = "http://" + relay + ":8080"
-	if pack.Relay.DummyKeyEnv != "" {
-		environment[pack.Relay.DummyKeyEnv] = "relay-injects-credentials"
-	}
+	environment[pack.Relay.DummyKeyEnv] = clientToken
 	started := time.Now()
 	log, executionErr := dockerRun(ctx, network, workspace, "", pack.EnvironmentImageDigest, []string{pack.Execution.Command}, environment)
 	wallMS := int(time.Since(started).Milliseconds())
@@ -149,4 +171,22 @@ func newID(prefix string) string {
 func sha256String(raw []byte) string {
 	sum := sha256.Sum256(raw)
 	return fmt.Sprintf("%x", sum)
+}
+
+func waitForHealthy(ctx context.Context, container string) error {
+	healthCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(200 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		output, err := commandOutput(healthCtx, "docker", "inspect", "--format", "{{.State.Health.Status}}", container)
+		if err == nil && strings.TrimSpace(string(output)) == "healthy" {
+			return nil
+		}
+		select {
+		case <-healthCtx.Done():
+			return fmt.Errorf("credential relay did not become healthy: %w", healthCtx.Err())
+		case <-ticker.C:
+		}
+	}
 }

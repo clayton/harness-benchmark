@@ -180,9 +180,47 @@ func TestHeadlessCommandKnownHarnesses(t *testing.T) {
 	if HeadlessCommand("manual") != "" {
 		t.Fatal("manual must not have headless launch")
 	}
-	got := HeadlessLaunch("pi", "grok-4.6")
-	if !strings.Contains(got, "--provider xai") || !strings.Contains(got, "--model grok-4.6") {
-		t.Fatalf("pi grok-4.6 launch: %s", got)
+	got := HeadlessLaunch("pi", "grok-4.6", "prompt")
+	joined := strings.Join(got.Args, " ")
+	if got.Program != "pi" || !strings.Contains(joined, "--provider xai") || !strings.Contains(joined, "--model grok-4.6") {
+		t.Fatalf("pi grok-4.6 launch: %+v", got)
+	}
+}
+
+func TestHeadlessLaunchNeverBuildsAShellCommand(t *testing.T) {
+	if got := HeadlessLaunch("pi", "model; touch /tmp/pwned", "prompt"); got.Program != "" {
+		t.Fatalf("unsafe model accepted: %+v", got)
+	}
+	prompt := "$(touch /tmp/pwned); ' quoted"
+	got := HeadlessLaunch("codex", "gpt-5", prompt)
+	if got.Program != "codex" || got.Args[len(got.Args)-1] != prompt {
+		t.Fatalf("prompt was not preserved as one argv value: %+v", got)
+	}
+}
+
+func TestRunIDsRejectTraversalAndSymlinkDirectories(t *testing.T) {
+	l := paths.New(t.TempDir(), t.TempDir())
+	if _, err := Load(l, "../../outside"); err == nil {
+		t.Fatal("traversal run id accepted")
+	}
+	target := t.TempDir()
+	if err := os.MkdirAll(l.OutDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, l.RunDir("deadbeefcafe")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Save(l, RunRecord{ID: "deadbeefcafe", Worktree: l.Worktree("deadbeefcafe")}); err == nil {
+		t.Fatal("symlink run directory accepted")
+	}
+}
+
+func TestSetupAndJudgeEnvironmentExcludesCredentials(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "must-not-leak")
+	for _, entry := range minimalCommandEnv() {
+		if strings.HasPrefix(entry, "OPENAI_API_KEY=") {
+			t.Fatal("credential inherited by scenario command")
+		}
 	}
 }
 
@@ -463,11 +501,11 @@ func TestOverlayLocalGoldAndEnvironmentPatch(t *testing.T) {
 
 func TestLoadNamesTheLookPath(t *testing.T) {
 	l := paths.New(t.TempDir(), t.TempDir())
-	_, err := Load(l, "missingid")
+	_, err := Load(l, "deadbeefdead")
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "run not found: missingid") {
+	if !strings.Contains(err.Error(), "run not found: deadbeefdead") {
 		t.Fatalf("error: %v", err)
 	}
 	if !strings.Contains(err.Error(), l.OutDir) {
@@ -479,7 +517,7 @@ func TestResolveRunIDFromWorkspacePath(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
 	l := paths.New(home, cwd)
-	rec := RunRecord{ID: "aabbccdd", Status: "pending", CreatedAt: Now()}
+	rec := RunRecord{ID: "aabbccddeeff", Status: "pending", Worktree: l.Worktree("aabbccddeeff"), CreatedAt: Now()}
 	if err := Save(l, rec); err != nil {
 		t.Fatal(err)
 	}

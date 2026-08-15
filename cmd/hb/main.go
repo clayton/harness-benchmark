@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -16,9 +18,10 @@ import (
 	"github.com/clayton/harness-benchmark/internal/paths"
 	"github.com/clayton/harness-benchmark/internal/publish"
 	"github.com/clayton/harness-benchmark/internal/report"
+	"github.com/clayton/harness-benchmark/internal/trust"
 )
 
-const version = "0.4.0"
+const version = "0.4.1"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -52,6 +55,12 @@ func run(args []string) error {
 		return cmdReport(args[1:])
 	case "publish":
 		return cmdPublish(args[1:])
+	case "inspect":
+		return cmdInspect(args[1:])
+	case "trust":
+		return cmdTrust(args[1:])
+	case "sandbox-command":
+		return cmdSandboxCommand(args[1:])
 	case "controlled":
 		return cmdControlled(args[1:])
 	default:
@@ -169,6 +178,9 @@ Commands:
   hbench finish [run_id] [--force]
   hbench report
   hbench publish [run_id]
+  hbench inspect -s <scenario>
+  hbench trust -s <scenario>
+  hbench sandbox-command -s <scenario> --harness <name> --image <name@sha256:digest>
   hbench controlled keygen|validate|run
 `
 }
@@ -300,7 +312,7 @@ func cmdRun(args []string) error {
   --harness        grok, pi, claude, codex, cursor, or manual
   --model          model id (pi: grok-4.6 uses xAI; x-ai/grok-4.6 uses OpenRouter)
   --no-setup       skip setup commands
-  --allow-setup    allow unreviewed Community setup commands without a prompt
+	  --trust-scenario approve this exact external scenario digest for this run
 `)
 	}
 	scenario := fs.String("s", "", "scenario id")
@@ -308,7 +320,7 @@ func cmdRun(args []string) error {
 	harness := fs.String("harness", "", "harness name")
 	model := fs.String("model", "", "model id")
 	noSetup := fs.Bool("no-setup", false, "skip setup commands")
-	allowSetup := fs.Bool("allow-setup", false, "allow unreviewed Community setup commands")
+	trustScenario := fs.String("trust-scenario", "", "approved external scenario sha256 digest")
 	fs.StringVar(scenario, "scenario", "", "scenario id")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -328,8 +340,8 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
-	if sc.Status == "community" && !*noSetup && len(sc.Acceptance.SetupCommands) > 0 && !*allowSetup {
-		if err := confirmCommunitySetup(sc); err != nil {
+	if sc.External {
+		if err := authorizeExternalScenario(l, sc, *trustScenario); err != nil {
 			return err
 		}
 	}
@@ -352,22 +364,139 @@ func cmdRun(args []string) error {
 	return nil
 }
 
-func confirmCommunitySetup(sc corpus.Scenario) error {
-	fmt.Printf("Community scenario %s has unreviewed setup commands:\n", sc.ID)
-	for _, command := range sc.Acceptance.SetupCommands {
-		fmt.Printf("  %s\n", command)
+func authorizeExternalScenario(l paths.Layout, sc corpus.Scenario, supplied string) error {
+	digest, err := corpus.TrustDigest(sc)
+	if err != nil {
+		return err
 	}
+	if supplied != "" {
+		if supplied != digest {
+			return fmt.Errorf("scenario trust digest mismatch: got %s, want %s", supplied, digest)
+		}
+		return nil
+	}
+	if trust.IsTrusted(l.DataDir, digest) {
+		return nil
+	}
+	fmt.Printf("External scenario %s requires trust before any setup, agent, or test command runs.\n", sc.ID)
+	printScenarioInspection(sc, digest)
 	info, _ := os.Stdin.Stat()
 	if info == nil || info.Mode()&os.ModeCharDevice == 0 {
-		return fmt.Errorf("refusing unreviewed setup in unattended mode; inspect it, then pass --allow-setup")
+		return fmt.Errorf("external scenario is not trusted; inspect it, then pass --trust-scenario %s", digest)
 	}
-	fmt.Print("Run these commands inside the scenario workspace? Type yes: ")
+	fmt.Print("Type once to run now, or remember to trust this digest: ")
 	answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-	if strings.TrimSpace(strings.ToLower(answer)) != "yes" {
-		return fmt.Errorf("setup declined")
+	switch strings.TrimSpace(strings.ToLower(answer)) {
+	case "once":
+		return nil
+	case "remember":
+		return trust.Remember(l.DataDir, digest, sc.ID)
+	default:
+		return fmt.Errorf("scenario trust declined")
 	}
+}
+
+func resolveScenarioFlag(args []string, command string) (paths.Layout, corpus.Scenario, error) {
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	scenario := fs.String("s", "", "scenario id, rodeo:slug@version, or YAML path")
+	from := fs.String("from", "", "extra scenario directory")
+	fs.StringVar(scenario, "scenario", "", "scenario id, rodeo:slug@version, or YAML path")
+	if err := fs.Parse(args); err != nil {
+		return paths.Layout{}, corpus.Scenario{}, err
+	}
+	if *scenario == "" {
+		return paths.Layout{}, corpus.Scenario{}, fmt.Errorf("usage: hbench %s -s <scenario>", command)
+	}
+	l := layout()
+	if err := ensureCorpus(l); err != nil {
+		return l, corpus.Scenario{}, err
+	}
+	sc, err := corpus.Resolve(l.ScenariosDir(), *from, *scenario)
+	return l, sc, err
+}
+
+func printScenarioInspection(sc corpus.Scenario, digest string) {
+	fmt.Printf("  trust digest: %s\n", digest)
+	fmt.Printf("  repository:   %s\n  base ref:     %s\n  gold ref:     %s\n", sc.Repo.URL, sc.Repo.BaseRef, sc.Repo.GoldRef)
+	fmt.Printf("  image:        %s\n  network:      %s\n", sc.EnvironmentImageDigest, sc.NetworkPolicy)
+	for _, item := range []struct {
+		name     string
+		commands []string
+	}{
+		{"setup", sc.Acceptance.SetupCommands}, {"build", sc.Acceptance.BuildCommands}, {"tests", sc.Acceptance.TestCommands},
+	} {
+		fmt.Printf("  %s commands:\n", item.name)
+		if len(item.commands) == 0 {
+			fmt.Println("    (none)")
+		}
+		for _, command := range item.commands {
+			fmt.Printf("    %s\n", command)
+		}
+	}
+}
+
+func cmdInspect(args []string) error {
+	_, sc, err := resolveScenarioFlag(args, "inspect")
+	if err != nil {
+		return err
+	}
+	digest, err := corpus.TrustDigest(sc)
+	if err != nil {
+		return err
+	}
+	printScenarioInspection(sc, digest)
 	return nil
 }
+
+func cmdTrust(args []string) error {
+	l, sc, err := resolveScenarioFlag(args, "trust")
+	if err != nil {
+		return err
+	}
+	if !sc.External {
+		return fmt.Errorf("embedded scenarios are already trusted")
+	}
+	digest, err := corpus.TrustDigest(sc)
+	if err != nil {
+		return err
+	}
+	printScenarioInspection(sc, digest)
+	if err := trust.Remember(l.DataDir, digest, sc.ID); err != nil {
+		return err
+	}
+	fmt.Printf("Remembered trust for %s at digest %s\n", sc.ID, digest)
+	return nil
+}
+
+func cmdSandboxCommand(args []string) error {
+	fs := flag.NewFlagSet("sandbox-command", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	scenario := fs.String("s", "", "scenario identifier available inside the image")
+	harness := fs.String("harness", "", "harness name")
+	image := fs.String("image", "", "dependency-complete hbench image pinned by sha256 digest")
+	engine := fs.String("engine", "docker", "docker or podman")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *scenario == "" || *harness == "" || (*engine != "docker" && *engine != "podman") {
+		return fmt.Errorf("usage: hbench sandbox-command -s <scenario> --harness <name> --image <name@sha256:digest>")
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9._/:@-]+@sha256:[0-9a-f]{64}$`).MatchString(*image) {
+		return fmt.Errorf("--image must be pinned by sha256 digest")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	resultDir := filepath.Join(cwd, "hb-out")
+	fmt.Printf("%s run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 --memory 4g --cpus 2 --tmpfs /tmp:rw,noexec,nosuid,size=512m -e HB_OUT_DIR=/results -v %s:/results:rw %s hbench run -s %s --harness %s\n",
+		*engine, shellQuote(resultDir), shellQuote(*image), shellQuote(*scenario), shellQuote(*harness))
+	fmt.Println("# Printed only; hbench did not start the container. The pinned image must contain the scenario repository and dependencies.")
+	return nil
+}
+
+func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
 
 func cmdExecute(args []string) error {
 	if wantsHelp(args) {
@@ -400,6 +529,9 @@ func cmdExecute(args []string) error {
 		return err
 	}
 	fmt.Printf("  exit=%d wall_ms=%d log=%s\n", res.ReturnCode, res.WallMS, res.LogPath)
+	if res.TimedOut {
+		return err
+	}
 	if err := ensureCorpus(l); err != nil {
 		return err
 	}
@@ -515,18 +647,47 @@ func cmdReport(args []string) error {
 }
 
 func cmdPublish(args []string) error {
-	if len(args) > 0 && (args[0] == "-h" || args[0] == "--help") {
-		fmt.Println("hbench publish [run_id]  — upload a finished run to agentrodeo.dev (not automatic)")
+	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	preview := fs.Bool("preview", false, "print the exact public payload without uploading")
+	fs.Usage = func() {
+		fmt.Println("hbench publish [--preview] [run_id]  — explicitly upload a privacy-filtered run")
+	}
+	if err := fs.Parse(args); err != nil {
+		if err == flag.ErrHelp {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() > 1 {
+		fs.Usage()
+		return fmt.Errorf("too many run ids")
+	}
+	if wantsHelp(args) {
+		fs.Usage()
 		return nil
 	}
 	l := layout()
 	id := ""
-	if len(args) > 0 {
-		id = args[0]
+	if fs.NArg() > 0 {
+		id = fs.Arg(0)
 	}
 	id, err := loop.ResolveRunID(l, id)
 	if err != nil {
 		return err
+	}
+	if *preview {
+		payload, err := publish.BuildPayload(l, id)
+		if err != nil {
+			return err
+		}
+		raw, err := json.MarshalIndent(payload, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(raw))
+		fmt.Println("Nothing was uploaded.")
+		return nil
 	}
 	out, err := publish.Publish(l, id, nil)
 	if err != nil {

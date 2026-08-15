@@ -4,7 +4,9 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -68,9 +70,13 @@ func TestExtractTelemetryIsBestEffort(t *testing.T) {
 
 func TestExecutePersistsExtractedTelemetry(t *testing.T) {
 	root := t.TempDir()
-	worktree := filepath.Join(root, "workspace")
+	l := paths.New(root, root)
+	worktree := l.Worktree("feedfacecafe")
 	binDir := filepath.Join(root, "bin")
 	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "HB_PROMPT.txt"), []byte("test prompt\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
@@ -88,9 +94,8 @@ printf '%s\n' '{"usage":{"input_tokens":10,"output_tokens":2},"modelUsage":{"gro
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
-	l := paths.New(root, root)
 	rec := RunRecord{
-		ID:        "telemetry-run",
+		ID:        "feedfacecafe",
 		Status:    "pending",
 		Worktree:  worktree,
 		Harness:   "grok",
@@ -130,6 +135,52 @@ printf '%s\n' '{"usage":{"input_tokens":10,"output_tokens":2},"modelUsage":{"gro
 	}
 	if saved.Telemetry.WallMS < 0 {
 		t.Fatalf("persisted wall time = %d", saved.Telemetry.WallMS)
+	}
+}
+
+func TestExecuteTimeoutKillsTheHarnessProcessGroup(t *testing.T) {
+	root := t.TempDir()
+	l := paths.New(root, root)
+	id := "badc0ffeeeee"
+	worktree := l.Worktree(id)
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "HB_PROMPT.txt"), []byte("wait"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fake := filepath.Join(binDir, "grok")
+	script := "#!/bin/sh\nif [ \"${1:-}\" = --version ]; then echo test; exit 0; fi\nsleep 30 &\necho $! > child.pid\nwait\n"
+	if err := os.WriteFile(fake, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if err := Save(l, RunRecord{ID: id, Status: "pending", Worktree: worktree, Harness: "grok", CreatedAt: Now()}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Execute(l, id, 300*time.Millisecond)
+	if err == nil || !result.TimedOut {
+		t.Fatalf("timeout result=%+v err=%v", result, err)
+	}
+	saved, loadErr := Load(l, id)
+	if loadErr != nil || saved.Status != "timeout" {
+		t.Fatalf("saved=%+v err=%v", saved, loadErr)
+	}
+	raw, readErr := os.ReadFile(filepath.Join(worktree, "child.pid"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	pid, parseErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if parseErr != nil {
+		t.Fatal(parseErr)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if killErr := syscall.Kill(pid, 0); killErr == nil {
+		t.Fatalf("child process %d survived timeout", pid)
 	}
 }
 

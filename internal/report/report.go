@@ -59,7 +59,7 @@ func Write(l paths.Layout) (string, int, error) {
 		return "", n, err
 	}
 	path := l.ReportFile()
-	return path, n, os.WriteFile(path, []byte(page), 0o644)
+	return path, n, loop.WriteFileAtomic(path, []byte(page), 0o600)
 }
 
 func renderRun(r loop.RunRecord) string {

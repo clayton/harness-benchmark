@@ -116,12 +116,33 @@ func PrepareWorktree(l paths.Layout, sc corpus.Scenario, runID string, runSetup 
 		for _, cmd := range sc.Acceptance.SetupCommands {
 			c := exec.Command("sh", "-c", cmd)
 			c.Dir = dest
+			c.Env = minimalCommandEnv()
 			if out, err := c.CombinedOutput(); err != nil {
 				return "", fmt.Errorf("setup %q: %w\n%s", cmd, err, out)
 			}
 		}
 	}
 	return dest, nil
+}
+
+func minimalCommandEnv() []string {
+	allowed := map[string]bool{
+		"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true,
+		"TMPDIR": true, "TMP": true, "TEMP": true, "LANG": true, "LANGUAGE": true,
+		"TERM": true, "CI": true, "NO_COLOR": true, "GOPATH": true, "GOMODCACHE": true,
+		"GOCACHE": true, "GOPROXY": true, "GONOSUMDB": true, "GOPRIVATE": true,
+		"NPM_CONFIG_CACHE": true, "npm_config_cache": true, "BUNDLE_PATH": true,
+		"BUNDLE_WITHOUT": true, "GEM_HOME": true, "GEM_PATH": true, "CARGO_HOME": true,
+		"RUSTUP_HOME": true, "XDG_CACHE_HOME": true,
+	}
+	var env []string
+	for _, entry := range os.Environ() {
+		key := strings.SplitN(entry, "=", 2)[0]
+		if allowed[key] || strings.HasPrefix(key, "LC_") {
+			env = append(env, entry)
+		}
+	}
+	return env
 }
 
 func applyEnvironmentPatch(dest string, sc corpus.Scenario) error {

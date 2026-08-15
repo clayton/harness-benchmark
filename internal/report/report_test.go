@@ -11,7 +11,7 @@ import (
 
 func TestWriteLocalHTMLDoesNotMentionUpload(t *testing.T) {
 	l := paths.New(t.TempDir(), t.TempDir())
-	rec := loop.RunRecord{ID: "aaaabbbbcccc", ScenarioID: "js-commander-negative-exp-E", Status: "completed", Harness: "grok", CreatedAt: loop.Now()}
+	rec := loop.RunRecord{ID: "aaaabbbbcccc", ScenarioID: "js-commander-negative-exp-E", Status: "completed", Worktree: l.Worktree("aaaabbbbcccc"), Harness: "grok", CreatedAt: loop.Now()}
 	if err := loop.Save(l, rec); err != nil {
 		t.Fatal(err)
 	}

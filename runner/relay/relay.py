@@ -8,7 +8,10 @@ from urllib.parse import urlsplit
 UPSTREAM = urlsplit(os.environ["UPSTREAM"])
 AUTH_HEADER = os.environ.get("AUTH_HEADER", "Authorization")
 AUTH_SCHEME = os.environ.get("AUTH_SCHEME", "Bearer").strip()
-AUTH_VALUE = os.environ["AUTH_VALUE"]
+with open(os.environ["AUTH_FILE"], encoding="utf-8") as secret_file:
+    AUTH_VALUE = secret_file.read().strip()
+with open(os.environ["CLIENT_TOKEN_FILE"], encoding="utf-8") as token_file:
+    CLIENT_TOKEN = token_file.read().strip()
 ALLOWED_HEADERS = {
     "accept", "content-type", "anthropic-version", "anthropic-beta",
     "openai-organization", "openai-project", "user-agent",
@@ -24,6 +27,12 @@ class Relay(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
         self.send_error(405)
 
     def do_POST(self):
@@ -36,6 +45,10 @@ class Relay(BaseHTTPRequestHandler):
         self.send_error(405)
 
     def relay(self):
+        provided = self.headers.get(AUTH_HEADER, "").removeprefix(AUTH_SCHEME).strip()
+        if provided != CLIENT_TOKEN:
+            self.send_error(401)
+            return
         length = int(self.headers.get("content-length", "0"))
         if length > MAX_REQUEST:
             self.send_error(413)

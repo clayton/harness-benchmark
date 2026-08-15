@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/clayton/harness-benchmark/internal/corpus"
 	"github.com/clayton/harness-benchmark/internal/paths"
@@ -70,8 +71,8 @@ func CreateRunWithModel(l paths.Layout, sc corpus.Scenario, harness, model strin
 		},
 	}
 	raw, _ := json.MarshalIndent(snap, "", "  ")
-	_ = os.WriteFile(filepath.Join(l.RunDir(id), "snapshot.json"), append(raw, '\n'), 0o644)
-	_ = os.WriteFile(filepath.Join(l.RunDir(id), "prompt.txt"), []byte(stringsTrim(sc.Prompt)+"\n"), 0o644)
+	_ = WriteFileAtomic(filepath.Join(l.RunDir(id), "snapshot.json"), append(raw, '\n'), 0o644)
+	_ = WriteFileAtomic(filepath.Join(l.RunDir(id), "prompt.txt"), []byte(stringsTrim(sc.Prompt)+"\n"), 0o600)
 	if err := SetLatest(l, id); err != nil {
 		return RunRecord{}, err
 	}
@@ -103,41 +104,54 @@ func stringsTrim(s string) string {
 	return s
 }
 
-func HeadlessCommand(harness string) string {
-	return HeadlessLaunch(harness, "")
+type LaunchSpec struct {
+	Program string
+	Args    []string
 }
 
-func HeadlessLaunch(harness, model string) string {
+var modelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+
+func HeadlessCommand(harness string) string {
+	return HeadlessLaunch(harness, "", "").Program
+}
+
+// HeadlessLaunch returns argv, never a shell command. Prompt text is passed as
+// one argument (or via the harness' prompt-file option), so model and prompt
+// values cannot be interpreted by a shell.
+func HeadlessLaunch(harness, model, prompt string) LaunchSpec {
+	if model != "" && !modelIDPattern.MatchString(model) {
+		return LaunchSpec{}
+	}
 	switch harness {
 	case "grok":
-		cmd := "grok --always-approve --max-turns 80 --output-format json --permission-mode bypassPermissions --prompt-file HB_PROMPT.txt"
+		args := []string{"--always-approve", "--max-turns", "80", "--output-format", "json", "--permission-mode", "bypassPermissions", "--prompt-file", "HB_PROMPT.txt"}
 		if model != "" {
-			cmd = "grok -m " + shellTok(model) + " --always-approve --max-turns 80 --output-format json --permission-mode bypassPermissions --prompt-file HB_PROMPT.txt"
+			args = append([]string{"-m", model}, args...)
 		}
-		return cmd
+		return LaunchSpec{Program: "grok", Args: args}
 	case "pi":
-		cmd := `pi -p --mode json --approve --no-session --no-extensions --no-skills`
+		args := []string{"-p", "--mode", "json", "--approve", "--no-session", "--no-extensions", "--no-skills"}
 		provider, mid := splitPiModel(model)
 		if provider != "" {
-			cmd += " --provider " + shellTok(provider)
+			args = append(args, "--provider", provider)
 		}
 		if mid != "" {
-			cmd += " --model " + shellTok(mid)
+			args = append(args, "--model", mid)
 		}
-		cmd += ` --append-system-prompt "UNATTENDED BENCHMARK MODE: Do not ask the user any questions. The task is fully specified in the user message. Work only in the current working directory. Do not create git worktrees outside this directory. Implement the fix, verify, then stop." "$(cat HB_PROMPT.txt)"`
-		return cmd
+		args = append(args, "--append-system-prompt", "UNATTENDED BENCHMARK MODE: Do not ask the user any questions. The task is fully specified in the user message. Work only in the current working directory. Do not create git worktrees outside this directory. Implement the fix, verify, then stop.", prompt)
+		return LaunchSpec{Program: "pi", Args: args}
 	case "claude":
-		return `claude -p --output-format json --dangerously-skip-permissions "$(cat HB_PROMPT.txt)"`
+		return LaunchSpec{Program: "claude", Args: []string{"-p", "--output-format", "json", "--dangerously-skip-permissions", prompt}}
 	case "codex":
-		return `codex exec --skip-git-repo-check "$(cat HB_PROMPT.txt)"`
+		return LaunchSpec{Program: "codex", Args: []string{"exec", "--skip-git-repo-check", prompt}}
 	case "cursor":
 		mid := model
 		if mid == "" {
 			mid = "composer-2.5"
 		}
-		return "cursor-agent -p --output-format text --force --model " + shellTok(mid) + ` "$(cat HB_PROMPT.txt)"`
+		return LaunchSpec{Program: "cursor-agent", Args: []string{"-p", "--output-format", "text", "--force", "--model", mid, prompt}}
 	default:
-		return ""
+		return LaunchSpec{}
 	}
 }
 
@@ -166,20 +180,6 @@ func indexByte(s string, c byte) int {
 		}
 	}
 	return -1
-}
-
-func shellTok(s string) string {
-	if s == "" {
-		return s
-	}
-	for i := 0; i < len(s); i++ {
-		ch := s[i]
-		if !(ch == '-' || ch == '.' || ch == '_' || ch == '/' || ch == ':' ||
-			ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9') {
-			return "'" + s + "'"
-		}
-	}
-	return s
 }
 
 func ScenarioForRun(l paths.Layout, officialDir, id string) (corpus.Scenario, error) {

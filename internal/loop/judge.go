@@ -30,7 +30,7 @@ func Finish(l paths.Layout, id string, sc corpus.Scenario, wallMS int, notes str
 	if err != nil {
 		diff = ""
 	}
-	_ = os.WriteFile(filepath.Join(l.RunDir(id), "patch.diff"), []byte(diff), 0o644)
+	_ = WriteFileAtomic(filepath.Join(l.RunDir(id), "patch.diff"), []byte(diff), 0o600)
 	trueVal := true
 	falseVal := false
 	var judges []JudgeScore
@@ -60,7 +60,7 @@ func Finish(l paths.Layout, id string, sc corpus.Scenario, wallMS int, notes str
 	}
 	if applied != nil || backups != nil {
 		restore = func() { restoreOverlays(rec.Worktree, backups) }
-		_ = os.WriteFile(filepath.Join(l.RunDir(id), "judge-gold-overlay.txt"), []byte(strings.Join(applied, "\n")+"\n"), 0o644)
+		_ = WriteFileAtomic(filepath.Join(l.RunDir(id), "judge-gold-overlay.txt"), []byte(strings.Join(applied, "\n")+"\n"), 0o600)
 		note := fmt.Sprintf("Applied %d gold test file(s): %s", len(applied), strings.Join(applied, ", "))
 		if len(sc.Acceptance.FailToPass) > 0 {
 			note += "; fail_to_pass=" + strings.Join(sc.Acceptance.FailToPass, ", ")
@@ -80,6 +80,7 @@ func Finish(l paths.Layout, id string, sc corpus.Scenario, wallMS int, notes str
 	for _, cmd := range sc.Acceptance.TestCommands {
 		c := exec.Command("sh", "-c", cmd)
 		c.Dir = rec.Worktree
+		c.Env = minimalCommandEnv()
 		out, err := c.CombinedOutput()
 		if err != nil {
 			ok = false
@@ -87,7 +88,7 @@ func Finish(l paths.Layout, id string, sc corpus.Scenario, wallMS int, notes str
 		} else {
 			notesParts = append(notesParts, cmd+" ok")
 		}
-		_ = os.WriteFile(filepath.Join(l.RunDir(id), "judge-"+sanitize(cmd)+".txt"), out, 0o644)
+		_ = WriteFileAtomic(filepath.Join(l.RunDir(id), "judge-"+sanitize(cmd)+".txt"), out, 0o600)
 	}
 	if len(sc.Acceptance.TestCommands) == 0 {
 		judges = append(judges, JudgeScore{Name: "acceptance_tests", Notes: "no test_commands"})

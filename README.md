@@ -82,7 +82,7 @@ Headless execute needs whatever harness you pin in a config:
 | `grok-grok45-*` | Grok Build / `grok` CLI authenticated to grok.com |
 | `pi-*-superpowers` | Vendored superpowers pin (see [vendor/README.md](./vendor/README.md)) |
 
-Manual mode needs no API keys: prepare a workspace, run any agent yourself, `hb finish`.
+Manual mode needs no API keys: prepare a workspace, run any agent yourself, `hbench finish`.
 
 ---
 
@@ -115,16 +115,14 @@ hbench report
 
 - **Scenarios** — real OSS bugfixes (pytest, chi, commander.js, FastAPI stream router, …). Agents see **intent only**; `gold_ref` is judge-side.
 - **Community manifests** — `hbench run -s rodeo:<slug>@<version>` downloads a digest-verified public manifest from Agent Rodeo. Private targets and evaluators never enter the manifest.
+- **Explicit external trust** — path, pack, and Community scenarios require approval of a digest covering the full executable manifest and referenced files. Use `hbench inspect` and `hbench trust`; embedded scenarios stay frictionless.
 - **Configs** — baseline and treatment recipes with **pinned harness versions** and models.
 - **Experiments** — YAML matrices (`scenario_ids` × `config_ids` × repeats) under `experiments/`.
 
 ### Execution
 
-- **`hb execute`** — headless launch from `config.harness_options.launch_headless`, multi-round stakeholder Q&A, telemetry parse (pi JSONL / grok JSON).
-- **Budget guards** — `max_minutes` / `max_usd` / `max_turns` / `max_tokens`; soft warn ~80%; hard kill process group; status `budget_exceeded`.
-- **Interaction modes** — `unattended` | `proxy` (cheap stakeholder model) | `human`.
-- **Dedup fingerprints** — skip completed scenario×config combos unless `--force`.
-- **Snapshots + rerun** — freeze definition; re-create setup (not bit-identical model output).
+- **`hbench execute`** — direct argv launch (no shell interpolation), telemetry parsing, and process-group timeout cleanup.
+- **Local-first runs** — ordinary users choose how to isolate hbench; `hbench sandbox-command` prints a hardened Docker/Podman command and never starts it.
 - **Controlled operator runs** — a trusted operator can validate and execute a private evaluator pack in isolated Docker containers, then upload a signed attestation. This does not run on the Rails host.
 
 ### Judging & reporting
@@ -152,7 +150,10 @@ Hosted execution is not part of v0.4. Controlled runs are started manually on a 
 | `hbench execute [run_id]` | Headless harness, then finish/judge (spends tokens) |
 | `hbench finish [run_id]` | Capture patch, judge, save. Stay in the start directory. `--force` to re-judge. |
 | `hbench report` | Local HTML in `./hb-out/report.html` (does not upload) |
-| `hbench publish [run_id]` | Optional upload to agentrodeo.dev |
+| `hbench publish [--preview] [run_id]` | Preview or explicitly upload a privacy-filtered public result |
+| `hbench inspect -s <scenario>` | Show the complete external execution surface and trust digest |
+| `hbench trust -s <scenario>` | Remember approval for one exact external scenario digest |
+| `hbench sandbox-command ...` | Print, but do not execute, a hardened container command |
 | `hbench controlled keygen` | Create an operator signing key |
 | `hbench controlled validate ...` | Reproduce base/target behavior twice and sign validation |
 | `hbench controlled run ...` | Run the isolated agent and private evaluator, then sign and upload |
@@ -186,7 +187,7 @@ hbench controlled run \
   --relay-image docker.io/claytonlz/hbench-model-relay@sha256:a172b484c2e3491fb4c064652c920ab9e863503bee9653f23e277958efac4a7a
 ```
 
-The setup container may access the network only to install dependencies already declared by the repository. The agent container uses an internal Docker network and receives a dummy provider key plus the relay URL. Only the credential-relay sidecar receives the real model credential. The private evaluator runs with Docker networking disabled. The signed upload contains the patch, public judge report, digests, and telemetry; raw agent logs remain private on the operator machine and should be removed after 90 days.
+Controlled protocol v3 requires dependency-complete pinned images. Setup and evaluator containers have networking disabled. The agent can reach only an authenticated credential relay on an internal network; the relay alone has a dedicated egress network, and the real provider secret is mounted from a mode-0600 temporary file. The signed upload contains the patch, public judge report, digests, and telemetry; raw agent logs remain private on the operator machine and should be removed after 90 days.
 
 Evaluator packs must pin both the execution image and relay image by immutable digest. Never commit provider credentials, runner private keys, or private target SHAs to the public benchmark repository.
 
@@ -203,7 +204,7 @@ Pre-built matrices under `experiments/`:
 | `skills-superpowers-hard.yaml` | Same on a harder FastAPI multi-file bug |
 | `skills-superpowers-proxy-incomplete.yaml` | Incomplete prompt + stakeholder proxy |
 
-Walkthroughs and directional findings: **[docs/EXAMPLES.md](./docs/EXAMPLES.md)**. Those YAML matrices were run with the older Python CLI; v0.4 runs one official ride at a time via `hbench run` / `hbench execute`.
+Walkthroughs and directional findings: **[docs/EXAMPLES.md](./docs/EXAMPLES.md)**. The supported CLI is the Go `hbench` binary; legacy Python CLI sources were removed in v0.4.1.
 
 ---
 

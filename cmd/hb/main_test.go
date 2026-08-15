@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/clayton/harness-benchmark/internal/corpus"
+	"github.com/clayton/harness-benchmark/internal/paths"
 )
 
 func capture(t *testing.T, args []string) string {
@@ -84,7 +86,7 @@ func TestRunHelpExitsZero(t *testing.T) {
 	}
 }
 
-func TestCommunitySetupRefusesUnattendedInput(t *testing.T) {
+func TestExternalScenarioRefusesUnattendedInput(t *testing.T) {
 	read, write, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
@@ -95,15 +97,16 @@ func TestCommunitySetupRefusesUnattendedInput(t *testing.T) {
 	os.Stdin = read
 	t.Cleanup(func() { os.Stdin = old })
 
-	err = confirmCommunitySetup(corpus.Scenario{ID: "community@1", Acceptance: corpus.Acceptance{SetupCommands: []string{"bundle install"}}})
-	if err == nil || !strings.Contains(err.Error(), "refusing unreviewed setup") {
-		t.Fatalf("expected unattended setup refusal, got %v", err)
+	l := paths.New(t.TempDir(), t.TempDir())
+	err = authorizeExternalScenario(l, corpus.Scenario{ID: "community@1", External: true, Acceptance: corpus.Acceptance{SetupCommands: []string{"bundle install"}}}, "")
+	if err == nil || !strings.Contains(err.Error(), "external scenario is not trusted") {
+		t.Fatalf("expected unattended trust refusal, got %v", err)
 	}
 }
 
 func TestPublishHelpDoesNotUpload(t *testing.T) {
 	out := capture(t, []string{"publish", "--help"})
-	if !strings.Contains(out, "not automatic") {
+	if !strings.Contains(out, "privacy-filtered run") {
 		t.Fatalf("help: %q", out)
 	}
 }
@@ -161,25 +164,26 @@ func TestBareAfterPendingSuggestsFinish(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
-	if err := os.MkdirAll(filepath.Join(cwd, "hb-out", "cafebabe"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(cwd, "hb-out", "cafebabecafe", "workspace"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runJSON := `{
-  "id": "cafebabe",
+	runJSON := fmt.Sprintf(`{
+  "id": "cafebabecafe",
   "scenario_id": "go-chi-tee-bytes-double-count",
   "status": "pending",
   "harness": "manual",
+	"worktree": %q,
   "created_at": "2026-08-13T00:00:00Z"
 }
-`
-	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "cafebabe", "run.json"), []byte(runJSON), 0o644); err != nil {
+`, filepath.Join(cwd, "hb-out", "cafebabecafe", "workspace"))
+	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "cafebabecafe", "run.json"), []byte(runJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "latest"), []byte("cafebabe"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "latest"), []byte("cafebabecafe"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	out := capture(t, nil)
-	if strings.TrimSpace(out) != "hbench finish cafebabe" {
+	if strings.TrimSpace(out) != "hbench finish cafebabecafe" {
 		t.Fatalf("pending next step: %q", out)
 	}
 }
@@ -191,22 +195,23 @@ func TestBareAfterCompletedSuggestsReport(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
-	if err := os.MkdirAll(filepath.Join(cwd, "hb-out", "cafebabe"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(cwd, "hb-out", "cafebabecafe", "workspace"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runJSON := `{
-  "id": "cafebabe",
+	runJSON := fmt.Sprintf(`{
+  "id": "cafebabecafe",
   "scenario_id": "go-chi-tee-bytes-double-count",
   "status": "completed",
   "harness": "manual",
+	"worktree": %q,
   "created_at": "2026-08-13T00:00:00Z",
   "finished_at": "2026-08-13T00:01:00Z"
 }
-`
-	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "cafebabe", "run.json"), []byte(runJSON), 0o644); err != nil {
+`, filepath.Join(cwd, "hb-out", "cafebabecafe", "workspace"))
+	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "cafebabecafe", "run.json"), []byte(runJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "latest"), []byte("cafebabe"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "latest"), []byte("cafebabecafe"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	out := capture(t, nil)
@@ -241,22 +246,23 @@ func TestReportMissingStoreNamesLookPath(t *testing.T) {
 func TestFinishFromWorkspaceFindsAncestorRun(t *testing.T) {
 	t.Setenv("HB_DATA_DIR", t.TempDir())
 	start := t.TempDir()
-	ws := filepath.Join(start, "hb-out", "cafebabe", "workspace")
+	ws := filepath.Join(start, "hb-out", "cafebabecafe", "workspace")
 	if err := os.MkdirAll(ws, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runJSON := `{
-  "id": "cafebabe",
+	runJSON := fmt.Sprintf(`{
+  "id": "cafebabecafe",
   "scenario_id": "does-not-exist",
   "status": "pending",
   "harness": "manual",
+	"worktree": %q,
   "created_at": "2026-08-13T00:00:00Z"
 }
-`
-	if err := os.WriteFile(filepath.Join(start, "hb-out", "cafebabe", "run.json"), []byte(runJSON), 0o644); err != nil {
+`, ws)
+	if err := os.WriteFile(filepath.Join(start, "hb-out", "cafebabecafe", "run.json"), []byte(runJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(start, "hb-out", "latest"), []byte("cafebabe"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(start, "hb-out", "latest"), []byte("cafebabecafe"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chdir(ws); err != nil {
@@ -282,31 +288,32 @@ func TestExecuteManualDoesNotTalkAboutTokens(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
-	if err := os.MkdirAll(filepath.Join(cwd, "hb-out", "cafebabe"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(cwd, "hb-out", "cafebabecafe", "workspace"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runJSON := `{
-  "id": "cafebabe",
+	runJSON := fmt.Sprintf(`{
+  "id": "cafebabecafe",
   "scenario_id": "go-chi-tee-bytes-double-count",
   "status": "pending",
   "harness": "manual",
+	"worktree": %q,
   "created_at": "2026-08-13T00:00:00Z"
 }
-`
-	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "cafebabe", "run.json"), []byte(runJSON), 0o644); err != nil {
+`, filepath.Join(cwd, "hb-out", "cafebabecafe", "workspace"))
+	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "cafebabecafe", "run.json"), []byte(runJSON), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "latest"), []byte("cafebabe"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(cwd, "hb-out", "latest"), []byte("cafebabecafe"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	out, err := captureResult(t, []string{"execute", "cafebabe"})
+	out, err := captureResult(t, []string{"execute", "cafebabecafe"})
 	if err == nil {
 		t.Fatal("manual execute should fail")
 	}
 	if strings.Contains(out, "spend tokens") || strings.Contains(err.Error(), "spend tokens") {
 		t.Fatalf("manual path mentioned tokens:\n%s\n%v", out, err)
 	}
-	if !strings.Contains(err.Error(), "hbench finish cafebabe") {
+	if !strings.Contains(err.Error(), "hbench finish cafebabecafe") {
 		t.Fatalf("should point at finish: %v", err)
 	}
 }
@@ -318,11 +325,11 @@ func TestFinishUnknownIDNamesLookPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
-	_, err := captureResult(t, []string{"finish", "no-such-run"})
+	_, err := captureResult(t, []string{"finish", "deadbeefdead"})
 	if err == nil {
 		t.Fatal("expected run not found")
 	}
-	if !strings.Contains(err.Error(), "run not found: no-such-run") {
+	if !strings.Contains(err.Error(), "run not found: deadbeefdead") {
 		t.Fatalf("error: %v", err)
 	}
 	if !strings.Contains(err.Error(), filepath.Join(cwd, "hb-out")) {

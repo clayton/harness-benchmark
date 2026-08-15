@@ -24,7 +24,7 @@ scenario_slug: safe-task
 scenario_version: 1
 target_ref: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 environment_image_digest: example/image@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
-protocol_id: controlled-v2
+protocol_id: controlled-v3
 evaluator_commands: ["test -f /evaluator/hidden.txt"]
 `
 	if err := os.WriteFile(filepath.Join(dir, "pack.yaml"), []byte(packYAML), 0o600); err != nil {
@@ -73,7 +73,7 @@ scenario_slug: safe-task
 scenario_version: 1
 target_ref: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 environment_image_digest: ` + unsafe.image + `
-protocol_id: controlled-v2
+protocol_id: controlled-v3
 evaluator_commands: ["true"]
 execution:
   harness: pi
@@ -126,7 +126,7 @@ func TestDockerControlledRunEndToEnd(t *testing.T) {
 		image = "alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
 	}
 	pack := Pack{
-		ScenarioSlug: "synthetic", ScenarioVersion: 1, EnvironmentImageDigest: image, ProtocolID: "controlled-v2",
+		ScenarioSlug: "synthetic", ScenarioVersion: 1, EnvironmentImageDigest: image, ProtocolID: "controlled-v3",
 		EvaluatorCommands: []string{`test "$(cat result.txt)" = fixed`}, Budget: map[string]any{"max_minutes": 2},
 		Execution: Execution{Harness: "manual", HarnessVersion: "test", Model: "synthetic", ModelVersion: "1", Command: "printf 'fixed\\n' > result.txt"},
 		Relay:     Relay{Upstream: "https://api.openai.com/v1", BaseURLEnv: "OPENAI_BASE_URL", SecretEnv: "OPENAI_API_KEY", AuthHeader: "Authorization", AuthScheme: "Bearer", DummyKeyEnv: "OPENAI_API_KEY"},
@@ -144,6 +144,7 @@ func TestDockerControlledRunEndToEnd(t *testing.T) {
 }
 
 func TestValidateRecreatesBaseAndTargetTwice(t *testing.T) {
+	t.Setenv("HB_CONTROLLED_ALLOW_LOCAL_REPO", "1")
 	repo := t.TempDir()
 	runGit := func(args ...string) string {
 		command := exec.Command("git", append([]string{"-C", repo}, args...)...)

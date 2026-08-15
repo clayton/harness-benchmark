@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -55,6 +56,7 @@ type Scenario struct {
 	ProtocolID             string     `yaml:"protocol_id,omitempty" json:"protocol_id,omitempty"`
 	NetworkPolicy          string     `yaml:"network_policy,omitempty" json:"network_policy,omitempty"`
 	EnvironmentImageDigest string     `yaml:"environment_image_digest,omitempty" json:"environment_image_digest,omitempty"`
+	External               bool       `yaml:"-" json:"-"`
 }
 
 func (s Scenario) ToDoctor() doctor.Scenario {
@@ -149,6 +151,7 @@ func LoadFile(path string) (Scenario, error) {
 		return Scenario{}, fmt.Errorf("%s: missing id", path)
 	}
 	s.SourceDir = filepath.Dir(path)
+	s.External = true
 	return s, nil
 }
 
@@ -160,7 +163,9 @@ func Resolve(officialDir, from, idOrPath string) (Scenario, error) {
 		return LoadFile(idOrPath)
 	}
 	if from != "" {
-		return Find(from, idOrPath)
+		s, err := Find(from, idOrPath)
+		s.External = err == nil
+		return s, err
 	}
 	return Find(officialDir, idOrPath)
 }
@@ -185,18 +190,18 @@ func FetchRodeo(cacheDir, identifier string, client *http.Client) (Scenario, err
 	request.Header.Set("Accept", "application/json")
 	response, err := client.Do(request)
 	if err != nil {
-		if cached, cacheErr := os.ReadFile(cachePath); cacheErr == nil {
-			return decodeRodeoManifest(cached, identifier)
-		}
 		return Scenario{}, fmt.Errorf("fetch rodeo scenario: %w", err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		return Scenario{}, fmt.Errorf("fetch rodeo scenario: HTTP %d", response.StatusCode)
 	}
-	raw, err := io.ReadAll(response.Body)
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 1<<20+1))
 	if err != nil {
 		return Scenario{}, err
+	}
+	if len(raw) > 1<<20 {
+		return Scenario{}, fmt.Errorf("rodeo scenario manifest exceeds 1 MiB")
 	}
 	scenario, err := decodeRodeoManifest(raw, identifier)
 	if err != nil {
@@ -237,7 +242,78 @@ func decodeRodeoManifest(raw []byte, identifier string) (Scenario, error) {
 	if scenario.ID != identifier {
 		return Scenario{}, fmt.Errorf("rodeo scenario id mismatch: got %q", scenario.ID)
 	}
+	if scenario.Status != "community" && scenario.Status != "active" && scenario.Status != "runnable" {
+		return Scenario{}, fmt.Errorf("rodeo scenario %s is not runnable (status %q)", identifier, scenario.Status)
+	}
+	if !strings.HasPrefix(scenario.Repo.URL, "https://github.com/") {
+		return Scenario{}, fmt.Errorf("rodeo scenario repository must use https://github.com/")
+	}
+	hex40 := regexp.MustCompile(`^[0-9a-f]{40}$`)
+	if !hex40.MatchString(scenario.Repo.BaseRef) || (scenario.Repo.GoldRef != "" && !hex40.MatchString(scenario.Repo.GoldRef)) {
+		return Scenario{}, fmt.Errorf("rodeo scenario refs must be full lowercase commit hashes")
+	}
+	scenario.External = true
 	return scenario, nil
+}
+
+// TrustDigest binds approval to the complete executable scenario plus any
+// local files it references. The server's manifest_digest is transport
+// integrity; this digest is the user's execution approval boundary.
+func TrustDigest(s Scenario) (string, error) {
+	copy := s
+	copy.SourceDir = ""
+	copy.External = false
+	copy.ManifestDigest = ""
+	raw, err := json.Marshal(copy)
+	if err != nil {
+		return "", err
+	}
+	h := sha256.New()
+	h.Write(raw)
+	refs := append([]string{}, s.Acceptance.GoldFiles...)
+	if s.Repo.EnvironmentPatch != "" {
+		refs = append(refs, s.Repo.EnvironmentPatch)
+	}
+	for _, rel := range refs {
+		path, err := referencedFile(s.SourceDir, rel)
+		if err != nil {
+			return "", err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read referenced file %q: %w", rel, err)
+		}
+		if len(data) > 4<<20 {
+			return "", fmt.Errorf("referenced file %q exceeds 4 MiB", rel)
+		}
+		h.Write([]byte(rel))
+		h.Write([]byte{0})
+		h.Write(data)
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func referencedFile(sourceDir, rel string) (string, error) {
+	if sourceDir == "" || rel == "" || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("unsafe referenced file %q", rel)
+	}
+	base, err := filepath.Abs(sourceDir)
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(base, filepath.Clean(rel))
+	within, err := filepath.Rel(base, path)
+	if err != nil || within == ".." || strings.HasPrefix(within, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("referenced file escapes scenario directory: %q", rel)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("referenced file is not a regular file: %q", rel)
+	}
+	return path, nil
 }
 
 func canonicalJSON(value any) ([]byte, error) {

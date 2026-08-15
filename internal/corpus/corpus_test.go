@@ -166,6 +166,37 @@ func TestResolveLoadsOptionalPackYAML(t *testing.T) {
 	}
 }
 
+func TestTrustDigestCoversCommandsAndReferencedFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "environment.patch")
+	if err := os.WriteFile(path, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := Scenario{ID: "external", SourceDir: dir, Repo: Repo{EnvironmentPatch: "environment.patch"}, Acceptance: Acceptance{TestCommands: []string{"go test ./..."}}}
+	first, err := TrustDigest(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Acceptance.TestCommands[0] = "make upload"
+	second, err := TrustDigest(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("command change did not change trust digest")
+	}
+	if err := os.WriteFile(path, []byte("second"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	third, err := TrustDigest(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == third {
+		t.Fatal("referenced file change did not change trust digest")
+	}
+}
+
 func TestOfficialChiPromptDoesNotRequireAddedTest(t *testing.T) {
 	dir := t.TempDir()
 	if err := EnsureCache(dir); err != nil {

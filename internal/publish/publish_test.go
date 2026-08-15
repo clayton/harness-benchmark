@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -44,7 +45,7 @@ func TestPublishPostsOnlyWhenCalled(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
 	l := paths.New(home, cwd)
-	rec := loop.RunRecord{ID: "deadbeefcafe", ScenarioID: "js-commander-negative-exp-E", Status: "completed", Harness: "grok", CreatedAt: loop.Now()}
+	rec := loop.RunRecord{ID: "deadbeefcafe", ScenarioID: "js-commander-negative-exp-E", Status: "completed", Worktree: l.Worktree("deadbeefcafe"), Harness: "grok", CreatedAt: loop.Now()}
 	if err := loop.Save(l, rec); err != nil {
 		t.Fatal(err)
 	}
@@ -73,5 +74,34 @@ func TestReportDoesNotUpload(t *testing.T) {
 	}
 	if len(entries) == 0 {
 		t.Fatal("missing report package")
+	}
+}
+
+func TestBuildPayloadExcludesPrivateRunAndSnapshotFields(t *testing.T) {
+	l := paths.New(t.TempDir(), t.TempDir())
+	id := "feedfacecafe"
+	worktree := l.Worktree(id)
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := loop.RunRecord{ID: id, ScenarioID: "task", ConfigID: "config", Status: "completed", Worktree: worktree,
+		Harness: "codex", Model: "gpt-5", Error: "SECRET_ERROR", Notes: "SECRET_NOTES", CreatedAt: loop.Now(),
+		Metadata: map[string]any{"workflow": "baseline", "private": "SECRET_METADATA"}}
+	if err := loop.Save(l, rec); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := `{"prompt":"SECRET_PROMPT","repo":{"url":"/Users/alice/private","base_ref":"abc"},"config":{"workflow":"baseline"}}`
+	if err := os.WriteFile(filepath.Join(l.RunDir(id), "snapshot.json"), []byte(snapshot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := BuildPayload(l, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(payload)
+	for _, secret := range []string{"SECRET_ERROR", "SECRET_NOTES", "SECRET_METADATA", "SECRET_PROMPT", "/Users/alice/private", worktree} {
+		if bytes.Contains(raw, []byte(secret)) {
+			t.Fatalf("payload leaked %q: %s", secret, raw)
+		}
 	}
 }

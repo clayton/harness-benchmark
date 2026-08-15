@@ -66,14 +66,14 @@ func LoadPack(path string) (Pack, string, error) {
 	if pack.Schema != "rodeo.evaluator.v1" {
 		return Pack{}, "", fmt.Errorf("unsupported evaluator schema %q", pack.Schema)
 	}
-	if pack.ScenarioSlug == "" || pack.ScenarioVersion < 1 || len(pack.TargetRef) != 40 {
+	if pack.ScenarioSlug == "" || pack.ScenarioVersion < 1 || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(pack.TargetRef) {
 		return Pack{}, "", fmt.Errorf("evaluator pack scenario and target are required")
 	}
 	if !pinnedImage.MatchString(pack.EnvironmentImageDigest) {
 		return Pack{}, "", fmt.Errorf("environment image must be pinned by sha256 digest")
 	}
-	if pack.ProtocolID == "" || len(pack.EvaluatorCommands) == 0 {
-		return Pack{}, "", fmt.Errorf("protocol and evaluator commands are required")
+	if pack.ProtocolID != "controlled-v3" || len(pack.EvaluatorCommands) == 0 {
+		return Pack{}, "", fmt.Errorf("controlled-v3 protocol and evaluator commands are required")
 	}
 	if pack.Execution.Command != "" {
 		upstream, err := url.Parse(pack.Relay.Upstream)
@@ -81,7 +81,7 @@ func LoadPack(path string) (Pack, string, error) {
 			return Pack{}, "", fmt.Errorf("relay upstream must be an approved HTTPS model provider")
 		}
 		if !environmentName.MatchString(pack.Relay.BaseURLEnv) || !environmentName.MatchString(pack.Relay.SecretEnv) ||
-			(pack.Relay.DummyKeyEnv != "" && !environmentName.MatchString(pack.Relay.DummyKeyEnv)) {
+			!environmentName.MatchString(pack.Relay.DummyKeyEnv) {
 			return Pack{}, "", fmt.Errorf("relay environment names are invalid")
 		}
 		if pack.Relay.BaseURLEnv == pack.Relay.SecretEnv {

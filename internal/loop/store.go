@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -57,20 +58,42 @@ func NewID() string {
 	return hex.EncodeToString(b[:])
 }
 
+var runIDPattern = regexp.MustCompile(`^[0-9a-f]{12}$`)
+
+func ValidateRunID(id string) error {
+	if !runIDPattern.MatchString(id) {
+		return fmt.Errorf("invalid run id %q (want 12 lowercase hex characters)", id)
+	}
+	return nil
+}
+
 func Save(l paths.Layout, r RunRecord) error {
+	if err := ValidateRunID(r.ID); err != nil {
+		return err
+	}
 	dir := l.RunDir(r.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
+	}
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("unsafe run directory: %s", dir)
 	}
 	raw, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "run.json"), append(raw, '\n'), 0o644)
+	return WriteFileAtomic(filepath.Join(dir, "run.json"), append(raw, '\n'), 0o644)
 }
 
 func Load(l paths.Layout, id string) (RunRecord, error) {
-	raw, err := os.ReadFile(filepath.Join(l.RunDir(id), "run.json"))
+	if err := ValidateRunID(id); err != nil {
+		return RunRecord{}, err
+	}
+	dir := l.RunDir(id)
+	if info, err := os.Lstat(dir); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return RunRecord{}, fmt.Errorf("run not found: %s\nlooked in %s", id, l.OutDir)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "run.json"))
 	if err != nil {
 		return RunRecord{}, fmt.Errorf("run not found: %s\nlooked in %s", id, l.OutDir)
 	}
@@ -78,7 +101,28 @@ func Load(l paths.Layout, id string) (RunRecord, error) {
 	if err := json.Unmarshal(raw, &r); err != nil {
 		return RunRecord{}, err
 	}
+	if r.ID != id {
+		return RunRecord{}, fmt.Errorf("run record id %q does not match directory %q", r.ID, id)
+	}
+	expectedWorkspace := filepath.Clean(l.Worktree(id))
+	if !samePath(r.Worktree, expectedWorkspace) {
+		return RunRecord{}, fmt.Errorf("run %s has unexpected workspace %q", id, r.Worktree)
+	}
+	if info, err := os.Lstat(expectedWorkspace); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return RunRecord{}, fmt.Errorf("run %s workspace is a symlink", id)
+	}
 	return r, nil
+}
+
+func samePath(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if left == right {
+		return true
+	}
+	resolvedLeft, leftErr := filepath.EvalSymlinks(left)
+	resolvedRight, rightErr := filepath.EvalSymlinks(right)
+	return leftErr == nil && rightErr == nil && resolvedLeft == resolvedRight
 }
 
 func LatestID(l paths.Layout) (string, error) {
@@ -89,7 +133,11 @@ func LatestID(l paths.Layout) (string, error) {
 	if len(raw) == 0 {
 		return "", fmt.Errorf("no latest run in %s", l.OutDir)
 	}
-	return string(bytesTrim(raw)), nil
+	id := string(bytesTrim(raw))
+	if err := ValidateRunID(id); err != nil {
+		return "", fmt.Errorf("invalid latest run: %w", err)
+	}
+	return id, nil
 }
 
 func LatestRecord(l paths.Layout) (RunRecord, error) {
@@ -126,6 +174,9 @@ func RunIDFromPath(path, outDir string) string {
 		return ""
 	}
 	id := parts[0]
+	if ValidateRunID(id) != nil {
+		return ""
+	}
 	if _, err := os.Stat(filepath.Join(absOut, id, "run.json")); err != nil {
 		return ""
 	}
@@ -150,10 +201,38 @@ func splitPath(p string) []string {
 }
 
 func SetLatest(l paths.Layout, id string) error {
+	if err := ValidateRunID(id); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(l.OutDir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(l.LatestFile(), []byte(id), 0o644)
+	return WriteFileAtomic(l.LatestFile(), []byte(id), 0o644)
+}
+
+func WriteFileAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".hb-write-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func bytesTrim(b []byte) []byte {
