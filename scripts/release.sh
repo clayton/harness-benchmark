@@ -1,9 +1,9 @@
 #!/bin/sh
 # Build pinned hb binaries and SHA256SUMS for a GitHub release.
-# Usage: scripts/release.sh v0.2.2
+# Usage: scripts/release.sh v0.4.0
 set -eu
 
-TAG=${1:?usage: scripts/release.sh v0.2.2}
+TAG=${1:?usage: scripts/release.sh v0.4.0}
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 OUT=${HB_RELEASE_DIR:-"$ROOT/dist/$TAG"}
 mkdir -p "$OUT"

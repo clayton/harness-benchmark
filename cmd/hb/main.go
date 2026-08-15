@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/clayton/harness-benchmark/internal/controlled"
 	"github.com/clayton/harness-benchmark/internal/corpus"
 	"github.com/clayton/harness-benchmark/internal/doctor"
 	"github.com/clayton/harness-benchmark/internal/loop"
@@ -16,7 +18,7 @@ import (
 	"github.com/clayton/harness-benchmark/internal/report"
 )
 
-const version = "0.3.5"
+const version = "0.4.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -50,13 +52,111 @@ func run(args []string) error {
 		return cmdReport(args[1:])
 	case "publish":
 		return cmdPublish(args[1:])
+	case "controlled":
+		return cmdControlled(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage())
 	}
 }
 
+func cmdControlled(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: hbench controlled keygen|validate|run")
+	}
+	switch args[0] {
+	case "keygen":
+		fs := flag.NewFlagSet("controlled keygen", flag.ContinueOnError)
+		key := fs.String("key", defaultRunnerKey(), "private key path")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		publicPath, fingerprint, err := controlled.Keygen(*key)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Created runner key %s\n  private: %s\n  public:  %s\n", fingerprint, *key, publicPath)
+		return nil
+	case "validate", "run":
+		return cmdControlledAction(args[0], args[1:])
+	default:
+		return fmt.Errorf("unknown controlled command %q", args[0])
+	}
+}
+
+func cmdControlledAction(action string, args []string) error {
+	fs := flag.NewFlagSet("controlled "+action, flag.ContinueOnError)
+	scenarioID := fs.String("scenario", "", "rodeo:slug@version")
+	packPath := fs.String("pack", "", "private evaluator pack directory")
+	keyPath := fs.String("key", defaultRunnerKey(), "runner private key path")
+	keyID := fs.String("key-id", "", "registered runner key ID")
+	relayImage := fs.String("relay-image", os.Getenv("HB_RELAY_IMAGE"), "pinned credential relay image")
+	artifactDir := fs.String("artifacts", filepath.Join(layout().OutDir, "controlled"), "private artifact directory")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *scenarioID == "" || *packPath == "" || *keyID == "" {
+		return fmt.Errorf("--scenario, --pack, and --key-id are required")
+	}
+	l := layout()
+	scenario, err := corpus.Resolve(l.ScenariosDir(), "", *scenarioID)
+	if err != nil {
+		return err
+	}
+	pack, packDigest, err := controlled.LoadPack(*packPath)
+	if err != nil {
+		return err
+	}
+	if scenario.ID != fmt.Sprintf("%s@%d", pack.ScenarioSlug, pack.ScenarioVersion) {
+		return fmt.Errorf("evaluator pack does not match scenario %s", scenario.ID)
+	}
+	minutes := 45
+	if value, ok := pack.Budget["max_minutes"].(int); ok {
+		minutes = value
+	}
+	ctx, cancel := controlled.RunTimeout(minutes)
+	defer cancel()
+	if action == "validate" {
+		result, err := controlled.Validate(ctx, scenario, pack, *packPath)
+		if err != nil {
+			return err
+		}
+		envelope, err := controlled.Sign(*keyPath, *keyID, controlled.ValidationPayload(scenario, pack, packDigest, result), "", map[string]any{"passed": true})
+		if err != nil {
+			return err
+		}
+		response, err := controlled.Upload(publish.RodeoURL(), envelope, nil)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Validated %s twice and uploaded attestation: %v\n", scenario.ID, response["accepted"])
+		return nil
+	}
+	if *relayImage == "" || !controlled.PinnedImage(*relayImage) {
+		return fmt.Errorf("--relay-image must be pinned by sha256 digest")
+	}
+	result, err := controlled.Run(ctx, scenario, pack, *packPath, *relayImage, *artifactDir)
+	if err != nil {
+		return err
+	}
+	envelope, err := controlled.Sign(*keyPath, *keyID, result.Payload, result.Patch, result.Report)
+	if err != nil {
+		return err
+	}
+	response, err := controlled.Upload(publish.RodeoURL(), envelope, nil)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Uploaded Controlled run %v\n  private log: %s (retain 90 days)\n", response["run_url"], result.LogPath)
+	return nil
+}
+
+func defaultRunnerKey() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".config", "hb", "runner-ed25519.pem")
+}
+
 func usage() string {
-	return `hbench — compare coding-agent systems on fixed official tasks.
+	return `hbench — compare coding-agent systems on fixed, repeatable tasks.
 
 Commands:
   hbench                      print one suggested command
@@ -69,6 +169,7 @@ Commands:
   hbench finish [run_id] [--force]
   hbench report
   hbench publish [run_id]
+  hbench controlled keygen|validate|run
 `
 }
 
@@ -199,6 +300,7 @@ func cmdRun(args []string) error {
   --harness        grok, pi, claude, codex, cursor, or manual
   --model          model id (pi: grok-4.6 uses xAI; x-ai/grok-4.6 uses OpenRouter)
   --no-setup       skip setup commands
+  --allow-setup    allow unreviewed Community setup commands without a prompt
 `)
 	}
 	scenario := fs.String("s", "", "scenario id")
@@ -206,6 +308,7 @@ func cmdRun(args []string) error {
 	harness := fs.String("harness", "", "harness name")
 	model := fs.String("model", "", "model id")
 	noSetup := fs.Bool("no-setup", false, "skip setup commands")
+	allowSetup := fs.Bool("allow-setup", false, "allow unreviewed Community setup commands")
 	fs.StringVar(scenario, "scenario", "", "scenario id")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -225,6 +328,11 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	if sc.Status == "community" && !*noSetup && len(sc.Acceptance.SetupCommands) > 0 && !*allowSetup {
+		if err := confirmCommunitySetup(sc); err != nil {
+			return err
+		}
+	}
 	rec, err := loop.CreateRunWithModel(l, sc, *harness, *model, !*noSetup)
 	if err != nil {
 		return err
@@ -240,6 +348,23 @@ func cmdRun(args []string) error {
 		fmt.Printf("  next:      stay in this directory; hbench execute %s\n", rec.ID)
 	} else {
 		fmt.Printf("  next:      stay in this directory; work in the workspace, then hbench finish %s\n", rec.ID)
+	}
+	return nil
+}
+
+func confirmCommunitySetup(sc corpus.Scenario) error {
+	fmt.Printf("Community scenario %s has unreviewed setup commands:\n", sc.ID)
+	for _, command := range sc.Acceptance.SetupCommands {
+		fmt.Printf("  %s\n", command)
+	}
+	info, _ := os.Stdin.Stat()
+	if info == nil || info.Mode()&os.ModeCharDevice == 0 {
+		return fmt.Errorf("refusing unreviewed setup in unattended mode; inspect it, then pass --allow-setup")
+	}
+	fmt.Print("Run these commands inside the scenario workspace? Type yes: ")
+	answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	if strings.TrimSpace(strings.ToLower(answer)) != "yes" {
+		return fmt.Errorf("setup declined")
 	}
 	return nil
 }

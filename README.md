@@ -24,7 +24,7 @@ Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 
 | | |
 |---|---|
-| **Status** | v0.2 — Go CLI |
+| **Status** | v0.4 — Go CLI + operator-controlled runs |
 | **CLI** | `hbench` |
 | **License** | MIT |
 
@@ -114,6 +114,7 @@ hbench report
 ### Corpus
 
 - **Scenarios** — real OSS bugfixes (pytest, chi, commander.js, FastAPI stream router, …). Agents see **intent only**; `gold_ref` is judge-side.
+- **Community manifests** — `hbench run -s rodeo:<slug>@<version>` downloads a digest-verified public manifest from Agent Rodeo. Private targets and evaluators never enter the manifest.
 - **Configs** — baseline and treatment recipes with **pinned harness versions** and models.
 - **Experiments** — YAML matrices (`scenario_ids` × `config_ids` × repeats) under `experiments/`.
 
@@ -124,6 +125,7 @@ hbench report
 - **Interaction modes** — `unattended` | `proxy` (cheap stakeholder model) | `human`.
 - **Dedup fingerprints** — skip completed scenario×config combos unless `--force`.
 - **Snapshots + rerun** — freeze definition; re-create setup (not bit-identical model output).
+- **Controlled operator runs** — a trusted operator can validate and execute a private evaluator pack in isolated Docker containers, then upload a signed attestation. This does not run on the Rails host.
 
 ### Judging & reporting
 
@@ -133,7 +135,7 @@ hbench report
 
 ### What is intentionally *not* here yet
 
-See [WISHLIST.md](./WISHLIST.md): Docker sandboxes, formal multi-adapter package, LLM rubric judges, parallel matrix runners, stats packages, published leaderboards, etc.
+Hosted execution is not part of v0.4. Controlled runs are started manually on a trusted Docker-capable operator machine. Ephemeral hosted runners are deferred to a later phase. See [WISHLIST.md](./WISHLIST.md) for the remaining roadmap.
 
 ---
 
@@ -151,12 +153,42 @@ See [WISHLIST.md](./WISHLIST.md): Docker sandboxes, formal multi-adapter package
 | `hbench finish [run_id]` | Capture patch, judge, save. Stay in the start directory. `--force` to re-judge. |
 | `hbench report` | Local HTML in `./hb-out/report.html` (does not upload) |
 | `hbench publish [run_id]` | Optional upload to agentrodeo.dev |
+| `hbench controlled keygen` | Create an operator signing key |
+| `hbench controlled validate ...` | Reproduce base/target behavior twice and sign validation |
+| `hbench controlled run ...` | Run the isolated agent and private evaluator, then sign and upload |
 
 ```bash
 hbench
 hbench version
 hbench list scenarios
 ```
+
+## Controlled Arena operator workflow
+
+Controlled runs are an operator feature, not a command for scenario contributors and not a workload for the Agent Rodeo Rails server. The public site accepts a proposal and publishes verified attestations; a separate trusted machine performs the untrusted execution.
+
+```bash
+# Once per operator machine; register the printed public key in Agent Rodeo.
+hbench controlled keygen
+
+# Validate a Candidate against the private target and evaluator twice.
+hbench controlled validate \
+  --scenario rodeo:example@1 \
+  --pack ../agentrodeo-evaluators/example/v1 \
+  --key-id <registered-key-id>
+
+# After promotion, execute and upload an official signed result.
+export OPENAI_API_KEY=... # remains in the credential-relay container
+hbench controlled run \
+  --scenario rodeo:example@1 \
+  --pack ../agentrodeo-evaluators/example/v1 \
+  --key-id <registered-key-id> \
+  --relay-image docker.io/claytonlz/hbench-model-relay@sha256:a172b484c2e3491fb4c064652c920ab9e863503bee9653f23e277958efac4a7a
+```
+
+The setup container may access the network only to install dependencies already declared by the repository. The agent container uses an internal Docker network and receives a dummy provider key plus the relay URL. Only the credential-relay sidecar receives the real model credential. The private evaluator runs with Docker networking disabled. The signed upload contains the patch, public judge report, digests, and telemetry; raw agent logs remain private on the operator machine and should be removed after 90 days.
+
+Evaluator packs must pin both the execution image and relay image by immutable digest. Never commit provider credentials, runner private keys, or private target SHAs to the public benchmark repository.
 
 ---
 
@@ -171,7 +203,7 @@ Pre-built matrices under `experiments/`:
 | `skills-superpowers-hard.yaml` | Same on a harder FastAPI multi-file bug |
 | `skills-superpowers-proxy-incomplete.yaml` | Incomplete prompt + stakeholder proxy |
 
-Walkthroughs and directional findings: **[docs/EXAMPLES.md](./docs/EXAMPLES.md)**. Those YAML matrices were run with the older Python CLI; v0.2 is one official ride at a time via `hb run` / `hb execute`.
+Walkthroughs and directional findings: **[docs/EXAMPLES.md](./docs/EXAMPLES.md)**. Those YAML matrices were run with the older Python CLI; v0.4 runs one official ride at a time via `hbench run` / `hbench execute`.
 
 ---
 
@@ -320,7 +352,7 @@ The Python tree is not required to install or run `hb`.
 
 ## Status
 
-**v0.3 is the Go CLI (`hbench`).** Install with the one-liner, run `hbench`, paste the suggested command. Community site: [agentrodeo.dev](https://agentrodeo.dev) — `hbench publish` after a local ride.
+**v0.4 is the Go CLI (`hbench`).** Install with the one-liner, run `hbench`, paste the suggested command. Community site: [agentrodeo.dev](https://agentrodeo.dev) — `hbench publish` after a local ride.
 
 Not SWE-bench-scale. Directional signal first.
 

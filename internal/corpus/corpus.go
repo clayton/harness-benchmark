@@ -1,13 +1,19 @@
 package corpus
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/clayton/harness-benchmark/internal/doctor"
 	"gopkg.in/yaml.v3"
@@ -32,17 +38,23 @@ type Acceptance struct {
 }
 
 type Scenario struct {
-	ID          string     `yaml:"id" json:"id"`
-	Type        string     `yaml:"type" json:"type"`
-	Title       string     `yaml:"title" json:"title"`
-	Description string     `yaml:"description" json:"description"`
-	Prompt      string     `yaml:"prompt" json:"prompt"`
-	Language    string     `yaml:"language" json:"language"`
-	Tags        []string   `yaml:"tags" json:"tags"`
-	Difficulty  string     `yaml:"difficulty" json:"difficulty"`
-	Repo        Repo       `yaml:"repo" json:"repo"`
-	Acceptance  Acceptance `yaml:"acceptance" json:"acceptance"`
-	SourceDir   string     `yaml:"-" json:"source_dir,omitempty"`
+	ID                     string     `yaml:"id" json:"id"`
+	Type                   string     `yaml:"type" json:"type"`
+	Title                  string     `yaml:"title" json:"title"`
+	Description            string     `yaml:"description" json:"description"`
+	Prompt                 string     `yaml:"prompt" json:"prompt"`
+	Language               string     `yaml:"language" json:"language"`
+	Tags                   []string   `yaml:"tags" json:"tags"`
+	Difficulty             string     `yaml:"difficulty" json:"difficulty"`
+	Repo                   Repo       `yaml:"repo" json:"repo"`
+	Acceptance             Acceptance `yaml:"acceptance" json:"acceptance"`
+	SourceDir              string     `yaml:"-" json:"source_dir,omitempty"`
+	Status                 string     `yaml:"status,omitempty" json:"status,omitempty"`
+	Version                int        `yaml:"version,omitempty" json:"version,omitempty"`
+	ManifestDigest         string     `yaml:"manifest_digest,omitempty" json:"manifest_digest,omitempty"`
+	ProtocolID             string     `yaml:"protocol_id,omitempty" json:"protocol_id,omitempty"`
+	NetworkPolicy          string     `yaml:"network_policy,omitempty" json:"network_policy,omitempty"`
+	EnvironmentImageDigest string     `yaml:"environment_image_digest,omitempty" json:"environment_image_digest,omitempty"`
 }
 
 func (s Scenario) ToDoctor() doctor.Scenario {
@@ -141,6 +153,9 @@ func LoadFile(path string) (Scenario, error) {
 }
 
 func Resolve(officialDir, from, idOrPath string) (Scenario, error) {
+	if strings.HasPrefix(idOrPath, "rodeo:") {
+		return FetchRodeo(officialDir, strings.TrimPrefix(idOrPath, "rodeo:"), nil)
+	}
 	if idOrPath != "" && (strings.HasSuffix(idOrPath, ".yaml") || strings.HasSuffix(idOrPath, ".yml") || strings.Contains(idOrPath, string(filepath.Separator))) {
 		return LoadFile(idOrPath)
 	}
@@ -148,6 +163,91 @@ func Resolve(officialDir, from, idOrPath string) (Scenario, error) {
 		return Find(from, idOrPath)
 	}
 	return Find(officialDir, idOrPath)
+}
+
+var rodeoID = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*@[1-9][0-9]*$`)
+
+func FetchRodeo(cacheDir, identifier string, client *http.Client) (Scenario, error) {
+	if !rodeoID.MatchString(identifier) {
+		return Scenario{}, fmt.Errorf("invalid rodeo scenario %q; expected slug@version", identifier)
+	}
+	parts := strings.SplitN(identifier, "@", 2)
+	cachePath := filepath.Join(cacheDir, "community", strings.ReplaceAll(identifier, "@", "-v")+".json")
+	baseURL := strings.TrimRight(os.Getenv("HB_RODEO_URL"), "/")
+	if baseURL == "" {
+		baseURL = "https://agentrodeo.dev"
+	}
+	if client == nil {
+		client = &http.Client{Timeout: 20 * time.Second}
+	}
+	url := fmt.Sprintf("%s/api/v1/scenarios/%s/versions/%s/manifest", baseURL, parts[0], parts[1])
+	request, _ := http.NewRequest(http.MethodGet, url, nil)
+	request.Header.Set("Accept", "application/json")
+	response, err := client.Do(request)
+	if err != nil {
+		if cached, cacheErr := os.ReadFile(cachePath); cacheErr == nil {
+			return decodeRodeoManifest(cached, identifier)
+		}
+		return Scenario{}, fmt.Errorf("fetch rodeo scenario: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return Scenario{}, fmt.Errorf("fetch rodeo scenario: HTTP %d", response.StatusCode)
+	}
+	raw, err := io.ReadAll(response.Body)
+	if err != nil {
+		return Scenario{}, err
+	}
+	scenario, err := decodeRodeoManifest(raw, identifier)
+	if err != nil {
+		return Scenario{}, err
+	}
+	dir := filepath.Dir(cachePath)
+	if err := os.MkdirAll(dir, 0o755); err == nil {
+		_ = os.WriteFile(cachePath, append(raw, '\n'), 0o644)
+	}
+	return scenario, nil
+}
+
+func decodeRodeoManifest(raw []byte, identifier string) (Scenario, error) {
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return Scenario{}, fmt.Errorf("decode rodeo scenario: %w", err)
+	}
+	claimed := fmt.Sprint(manifest["manifest_digest"])
+	digestible := make(map[string]any, len(manifest))
+	for key, value := range manifest {
+		if key != "manifest_digest" && key != "status" {
+			digestible[key] = value
+		}
+	}
+	canonical, err := canonicalJSON(digestible)
+	if err != nil {
+		return Scenario{}, fmt.Errorf("canonicalize rodeo scenario: %w", err)
+	}
+	actual := fmt.Sprintf("%x", sha256.Sum256(canonical))
+	if claimed == "" || claimed != actual {
+		return Scenario{}, fmt.Errorf("rodeo scenario digest mismatch")
+	}
+	raw, _ = json.Marshal(manifest)
+	var scenario Scenario
+	if err := json.Unmarshal(raw, &scenario); err != nil {
+		return Scenario{}, err
+	}
+	if scenario.ID != identifier {
+		return Scenario{}, fmt.Errorf("rodeo scenario id mismatch: got %q", scenario.ID)
+	}
+	return scenario, nil
+}
+
+func canonicalJSON(value any) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buffer.Bytes(), []byte("\n")), nil
 }
 
 // UnmarshalScenarioJSON loads a scenario from a snapshot. New snapshots use the

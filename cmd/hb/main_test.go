@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/clayton/harness-benchmark/internal/corpus"
 )
 
 func capture(t *testing.T, args []string) string {
@@ -79,6 +81,23 @@ func TestRunHelpExitsZero(t *testing.T) {
 	out := capture(t, []string{"run", "--help"})
 	if !strings.Contains(out, "hbench run -s") {
 		t.Fatalf("run help:\n%s", out)
+	}
+}
+
+func TestCommunitySetupRefusesUnattendedInput(t *testing.T) {
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer read.Close()
+	defer write.Close()
+	old := os.Stdin
+	os.Stdin = read
+	t.Cleanup(func() { os.Stdin = old })
+
+	err = confirmCommunitySetup(corpus.Scenario{ID: "community@1", Acceptance: corpus.Acceptance{SetupCommands: []string{"bundle install"}}})
+	if err == nil || !strings.Contains(err.Error(), "refusing unreviewed setup") {
+		t.Fatalf("expected unattended setup refusal, got %v", err)
 	}
 }
 

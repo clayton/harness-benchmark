@@ -1,11 +1,51 @@
 package corpus
 
 import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestFetchRodeoVerifiesAndCachesSafeManifest(t *testing.T) {
+	manifest := map[string]any{
+		"schema": "rodeo.scenario.v2", "id": "safe-task@1", "slug": "safe-task", "version": 1,
+		"status": "community", "type": "bugfix", "title": "Safe task", "description": "Fix it", "prompt": "Fix <tag> & keep it safe",
+		"language": "Go", "tags": []any{}, "difficulty": "medium",
+		"repo":       map[string]any{"url": "https://github.com/example/project", "base_ref": strings.Repeat("a", 40)},
+		"acceptance": map[string]any{"setup_commands": []any{"go mod download"}, "test_commands": []any{"go test ./..."}},
+		"rubric":     "Tests pass", "environment_image_digest": nil, "network_policy": "none", "budget": map[string]any{},
+		"protocol_id": nil, "rating_eligible_until": nil,
+	}
+	digestible := map[string]any{}
+	for key, value := range manifest {
+		if key != "status" {
+			digestible[key] = value
+		}
+	}
+	raw, _ := canonicalJSON(digestible)
+	manifest["manifest_digest"] = fmt.Sprintf("%x", sha256.Sum256(raw))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(manifest) }))
+	defer server.Close()
+	t.Setenv("HB_RODEO_URL", server.URL)
+	dir := t.TempDir()
+
+	scenario, err := FetchRodeo(dir, "safe-task@1", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scenario.ID != "safe-task@1" || scenario.Repo.GoldRef != "" || scenario.Status != "community" {
+		t.Fatalf("unsafe or incomplete scenario: %#v", scenario)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "community", "safe-task-v1.json")); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestEnsureCacheWritesOfficialYAMLs(t *testing.T) {
 	dir := t.TempDir()
