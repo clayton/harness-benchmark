@@ -16,7 +16,7 @@ import (
 	"github.com/clayton/harness-benchmark/internal/report"
 )
 
-const version = "0.3.4"
+const version = "0.3.5"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {

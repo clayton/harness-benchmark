@@ -4,6 +4,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 func TestExtractGrokTelemetry(t *testing.T) {
 	path := writeTelemetryFixture(t, `{
   "usage": {
+    "total_tokens": 999,
     "input_tokens": 80,
     "output_tokens": 16,
     "reasoning_tokens": 14,
@@ -32,14 +34,15 @@ func TestExtractGrokTelemetry(t *testing.T) {
 	assertIntPointer(t, "cache read", got.CacheReadTokens, 1200)
 	assertIntPointer(t, "cache write", got.CacheWriteTokens, 3)
 	assertIntPointer(t, "turns", got.Turns, 21)
+	assertIntPointer(t, "total", got.TotalTokens, 999)
 	assertFloatPointer(t, "cost", got.EstimatedUSD, 0.912408)
 }
 
 func TestExtractPiTelemetry(t *testing.T) {
-	path := writeTelemetryFixture(t, `{"type":"message_end","message":{"usage":{"input":12,"output":3,"cacheRead":20,"cacheWrite":2,"reasoning":4,"cost":{"total":0.05}}}}
+	path := writeTelemetryFixture(t, `{"type":"message_end","message":{"usage":{"totalTokens":40,"input":12,"output":3,"cacheRead":20,"cacheWrite":2,"reasoning":4,"cost":{"total":0.05}}}}
 {"type":"message_end","message":{}}
 not json
-{"type":"message_end","message":{"usage":{"input":8,"output":2,"cacheRead":10,"cacheWrite":1,"reasoning":6,"cost":{"total":0.03}}}}
+{"type":"message_end","message":{"usage":{"totalTokens":50,"input":8,"output":2,"cacheRead":10,"cacheWrite":1,"reasoning":6,"cost":{"total":0.03}}}}
 `)
 
 	got := ExtractTelemetry("pi", path)
@@ -49,6 +52,7 @@ not json
 	assertIntPointer(t, "cache read", got.CacheReadTokens, 30)
 	assertIntPointer(t, "cache write", got.CacheWriteTokens, 3)
 	assertIntPointer(t, "turns", got.Turns, 2)
+	assertIntPointer(t, "total", got.TotalTokens, 90)
 	assertFloatPointer(t, "cost", got.EstimatedUSD, 0.08)
 }
 
@@ -74,6 +78,10 @@ func TestExecutePersistsExtractedTelemetry(t *testing.T) {
 	}
 	fakeGrok := filepath.Join(binDir, "grok")
 	if err := os.WriteFile(fakeGrok, []byte(`#!/bin/sh
+if [ "${1:-}" = "--version" ]; then
+  printf '%s\n' 'grok 1.2.3'
+  exit 0
+fi
 printf '%s\n' '{"usage":{"input_tokens":10,"output_tokens":2},"modelUsage":{"grok-test":{"modelCalls":1,"costUSD":0.04}}}'
 `), 0o755); err != nil {
 		t.Fatal(err)
@@ -92,7 +100,10 @@ printf '%s\n' '{"usage":{"input_tokens":10,"output_tokens":2},"modelUsage":{"gro
 	if err := Save(l, rec); err != nil {
 		t.Fatal(err)
 	}
-	result, err := Execute(l, rec.ID, time.Second)
+	if err := os.WriteFile(filepath.Join(l.RunDir(rec.ID), "snapshot.json"), []byte(`{"config":{"harness":"grok"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Execute(l, rec.ID, 45*time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +118,16 @@ printf '%s\n' '{"usage":{"input_tokens":10,"output_tokens":2},"modelUsage":{"gro
 	assertIntPointer(t, "persisted tokens out", saved.Telemetry.TokensOut, 2)
 	assertIntPointer(t, "persisted turns", saved.Telemetry.Turns, 1)
 	assertFloatPointer(t, "persisted cost", saved.Telemetry.EstimatedUSD, 0.04)
+	if saved.HarnessVersion != "grok 1.2.3" {
+		t.Fatalf("harness version = %q", saved.HarnessVersion)
+	}
+	snapshotRaw, err := os.ReadFile(filepath.Join(l.RunDir(rec.ID), "snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(snapshotRaw), `"max_minutes": 45`) {
+		t.Fatalf("snapshot missing execution budget: %s", snapshotRaw)
+	}
 	if saved.Telemetry.WallMS < 0 {
 		t.Fatalf("persisted wall time = %d", saved.Telemetry.WallMS)
 	}

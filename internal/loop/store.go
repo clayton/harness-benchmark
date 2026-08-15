@@ -48,6 +48,7 @@ type Telemetry struct {
 	ReasoningTokens  *int     `json:"reasoning_tokens,omitempty"`
 	CacheReadTokens  *int     `json:"cache_read_tokens,omitempty"`
 	CacheWriteTokens *int     `json:"cache_write_tokens,omitempty"`
+	TotalTokens      *int     `json:"total_tokens,omitempty"`
 }
 
 func NewID() string {

@@ -16,9 +16,9 @@ func ExtractTelemetry(harness, logPath string) Telemetry {
 	}
 	switch harness {
 	case "grok":
-		return grokTelemetry(raw)
+		return withTotalTokens(grokTelemetry(raw))
 	case "pi":
-		return piTelemetry(raw)
+		return withTotalTokens(piTelemetry(raw))
 	default:
 		return Telemetry{}
 	}
@@ -26,6 +26,7 @@ func ExtractTelemetry(harness, logPath string) Telemetry {
 
 type grokLog struct {
 	Usage struct {
+		TotalTokens              int `json:"total_tokens"`
 		InputTokens              int `json:"input_tokens"`
 		OutputTokens             int `json:"output_tokens"`
 		ReasoningTokens          int `json:"reasoning_tokens"`
@@ -54,6 +55,10 @@ func grokTelemetry(raw []byte) Telemetry {
 		t.ReasoningTokens = intPointer(log.Usage.ReasoningTokens)
 		t.CacheReadTokens = intPointer(log.Usage.CacheReadInputTokens)
 		t.CacheWriteTokens = intPointer(log.Usage.CacheCreationInputTokens)
+		seen = true
+	}
+	if log.Usage.TotalTokens > 0 {
+		t.TotalTokens = intPointer(log.Usage.TotalTokens)
 		seen = true
 	}
 
@@ -88,6 +93,7 @@ type piLogLine struct {
 	Type    string `json:"type"`
 	Message struct {
 		Usage *struct {
+			Total      int `json:"totalTokens"`
 			Input      int `json:"input"`
 			Output     int `json:"output"`
 			CacheRead  int `json:"cacheRead"`
@@ -103,6 +109,7 @@ type piLogLine struct {
 func piTelemetry(raw []byte) Telemetry {
 	input, output, reasoning := 0, 0, 0
 	cacheRead, cacheWrite, turns := 0, 0, 0
+	nativeTotal := 0
 	cost := 0.0
 	costSeen := false
 
@@ -121,6 +128,9 @@ func piTelemetry(raw []byte) Telemetry {
 		reasoning += usage.Reasoning
 		cacheRead += usage.CacheRead
 		cacheWrite += usage.CacheWrite
+		if usage.Total > 0 {
+			nativeTotal += usage.Total
+		}
 		turns++
 		if usage.Cost != nil {
 			cost += usage.Cost.Total
@@ -138,6 +148,9 @@ func piTelemetry(raw []byte) Telemetry {
 		CacheReadTokens:  intPointer(cacheRead),
 		CacheWriteTokens: intPointer(cacheWrite),
 	}
+	if nativeTotal > 0 {
+		t.TotalTokens = intPointer(nativeTotal)
+	}
 	if costSeen {
 		t.EstimatedUSD = floatPointer(cost)
 	}
@@ -147,3 +160,21 @@ func piTelemetry(raw []byte) Telemetry {
 func intPointer(value int) *int { return &value }
 
 func floatPointer(value float64) *float64 { return &value }
+
+func withTotalTokens(t Telemetry) Telemetry {
+	if t.TotalTokens != nil {
+		return t
+	}
+	parts := []*int{t.TokensIn, t.TokensOut, t.ReasoningTokens, t.CacheReadTokens, t.CacheWriteTokens}
+	total, seen := 0, false
+	for _, part := range parts {
+		if part != nil {
+			total += *part
+			seen = true
+		}
+	}
+	if seen {
+		t.TotalTokens = intPointer(total)
+	}
+	return t
+}

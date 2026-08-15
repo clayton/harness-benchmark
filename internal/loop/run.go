@@ -25,6 +25,10 @@ func CreateRunWithModel(l paths.Layout, sc corpus.Scenario, harness, model strin
 	if model == "" {
 		model = defaultModel(harness)
 	}
+	interaction := "unattended"
+	if harness == "manual" {
+		interaction = "human"
+	}
 	sum := sha256.Sum256([]byte(stringsTrim(sc.Prompt)))
 	rec := RunRecord{
 		ID:         id,
@@ -36,7 +40,7 @@ func CreateRunWithModel(l paths.Layout, sc corpus.Scenario, harness, model strin
 		Model:      model,
 		Metadata: map[string]any{
 			"workflow":         "baseline",
-			"interaction":      "unattended",
+			"interaction":      interaction,
 			"prompt_sha256_16": hex.EncodeToString(sum[:])[:16],
 			"base_ref":         sc.Repo.BaseRef,
 			"gold_ref":         sc.Repo.GoldRef,
@@ -52,9 +56,12 @@ func CreateRunWithModel(l paths.Layout, sc corpus.Scenario, harness, model strin
 		"prompt_sha256_16": hex.EncodeToString(sum[:])[:16],
 		"scenario":         sc,
 		"config": map[string]any{
-			"id":       rec.ConfigID,
-			"harness":  harness,
-			"workflow": "baseline",
+			"id":          rec.ConfigID,
+			"harness":     harness,
+			"model":       model,
+			"workflow":    "baseline",
+			"skills":      []string{},
+			"interaction": interaction,
 		},
 		"repo": map[string]any{
 			"url":      sc.Repo.URL,
