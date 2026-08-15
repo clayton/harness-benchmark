@@ -21,7 +21,7 @@ import (
 	"github.com/clayton/harness-benchmark/internal/trust"
 )
 
-const version = "0.4.1"
+const version = "0.4.2"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -133,7 +133,11 @@ func cmdControlledAction(action string, args []string) error {
 		if err != nil {
 			return err
 		}
-		response, err := controlled.Upload(publish.RodeoURL(), envelope, nil)
+		rodeoURL, err := publish.ValidatedRodeoURL()
+		if err != nil {
+			return err
+		}
+		response, err := controlled.Upload(rodeoURL, envelope, nil)
 		if err != nil {
 			return err
 		}
@@ -151,7 +155,11 @@ func cmdControlledAction(action string, args []string) error {
 	if err != nil {
 		return err
 	}
-	response, err := controlled.Upload(publish.RodeoURL(), envelope, nil)
+	rodeoURL, err := publish.ValidatedRodeoURL()
+	if err != nil {
+		return err
+	}
+	response, err := controlled.Upload(rodeoURL, envelope, nil)
 	if err != nil {
 		return err
 	}
@@ -693,7 +701,8 @@ func cmdPublish(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Published %s to %s\n", id, publish.RodeoURL())
+	rodeoURL, _ := publish.ValidatedRodeoURL()
+	fmt.Printf("Published %s to %s\n", id, rodeoURL)
 	if v, ok := out["id"]; ok {
 		fmt.Printf("  remote id: %v\n", v)
 	}

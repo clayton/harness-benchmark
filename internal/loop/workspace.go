@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -153,13 +154,13 @@ func applyEnvironmentPatch(dest string, sc corpus.Scenario) error {
 	if sc.SourceDir == "" {
 		return fmt.Errorf("environment_patch set but scenario has no source dir")
 	}
-	patch := filepath.Join(sc.SourceDir, rel)
-	if _, err := os.Stat(patch); err != nil {
-		return fmt.Errorf("environment patch %s: %w", patch, err)
+	patch, err := readRooted(sc.SourceDir, rel)
+	if err != nil {
+		return fmt.Errorf("environment patch %s: %w", rel, err)
 	}
 	_ = git(dest, "config", "user.email", "hbench@local")
 	_ = git(dest, "config", "user.name", "hbench")
-	if err := git(dest, "apply", "--whitespace=nowarn", patch); err != nil {
+	if err := runGitInput(dest, patch, "apply", "--whitespace=nowarn", "-"); err != nil {
 		return fmt.Errorf("apply environment patch: %w", err)
 	}
 	if err := git(dest, "add", "-A"); err != nil {
@@ -185,9 +186,16 @@ func git(dir string, args ...string) error {
 }
 
 func runGit(dir string, args ...string) error {
+	return runGitInput(dir, nil, args...)
+}
+
+func runGitInput(dir string, input []byte, args ...string) error {
 	cmd := exec.Command("git", args...)
 	if dir != "" {
 		cmd.Dir = dir
+	}
+	if input != nil {
+		cmd.Stdin = bytes.NewReader(input)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {

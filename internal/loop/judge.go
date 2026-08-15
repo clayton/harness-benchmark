@@ -2,7 +2,6 @@ package loop
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -150,26 +149,21 @@ func overlayLocalGold(worktree string, sc corpus.Scenario) ([]string, map[string
 		if rel == "" {
 			continue
 		}
-		src := filepath.Join(sc.SourceDir, rel)
-		content, err := os.ReadFile(src)
+		content, err := readRooted(sc.SourceDir, rel)
 		if err != nil {
-			return applied, backups, fmt.Errorf("gold file %s: %w", src, err)
+			return applied, backups, fmt.Errorf("gold file %s: %w", rel, err)
 		}
 		destRel := rel
 		if !strings.Contains(rel, "/") && strings.HasSuffix(rel, ".rb") {
 			destRel = filepath.Join("test", "hb_"+rel)
 		}
-		target := filepath.Join(worktree, filepath.FromSlash(destRel))
-		if raw, err := os.ReadFile(target); err == nil {
+		if raw, err := readRooted(worktree, destRel); err == nil {
 			s := string(raw)
 			backups[destRel] = &s
 		} else {
 			backups[destRel] = nil
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return applied, backups, err
-		}
-		if err := os.WriteFile(target, content, 0o644); err != nil {
+		if err := writeRooted(worktree, destRel, content, 0o644); err != nil {
 			return applied, backups, err
 		}
 		applied = append(applied, destRel)
@@ -181,8 +175,7 @@ func overlayGoldTests(cache, worktree string, sc corpus.Scenario) ([]string, map
 	backups := map[string]*string{}
 	var applied []string
 	for _, rel := range listGoldTestFiles(cache, sc) {
-		target := filepath.Join(worktree, filepath.FromSlash(rel))
-		if raw, err := os.ReadFile(target); err == nil {
+		if raw, err := readRooted(worktree, rel); err == nil {
 			s := string(raw)
 			backups[rel] = &s
 		} else {
@@ -193,10 +186,7 @@ func overlayGoldTests(cache, worktree string, sc corpus.Scenario) ([]string, map
 		if err != nil {
 			return applied, backups, fmt.Errorf("show %s:%s: %w", sc.Repo.GoldRef, rel, err)
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return applied, backups, err
-		}
-		if err := os.WriteFile(target, content, 0o644); err != nil {
+		if err := writeRooted(worktree, rel, content, 0o644); err != nil {
 			return applied, backups, err
 		}
 		applied = append(applied, rel)
@@ -206,12 +196,11 @@ func overlayGoldTests(cache, worktree string, sc corpus.Scenario) ([]string, map
 
 func restoreOverlays(worktree string, backups map[string]*string) {
 	for rel, prev := range backups {
-		target := filepath.Join(worktree, filepath.FromSlash(rel))
 		if prev == nil {
-			_ = os.Remove(target)
+			_ = removeRooted(worktree, rel)
 			continue
 		}
-		_ = os.WriteFile(target, []byte(*prev), 0o644)
+		_ = writeRooted(worktree, rel, []byte(*prev), 0o644)
 	}
 }
 

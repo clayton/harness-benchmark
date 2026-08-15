@@ -1,11 +1,10 @@
 package report
 
 import (
-	"encoding/json"
 	"fmt"
 	"html"
+	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/clayton/harness-benchmark/internal/loop"
@@ -23,12 +22,8 @@ func Write(l paths.Layout) (string, int, error) {
 		if !e.IsDir() {
 			continue
 		}
-		raw, err := os.ReadFile(filepath.Join(l.OutDir, e.Name(), "run.json"))
+		r, err := loop.Load(l, e.Name())
 		if err != nil {
-			continue
-		}
-		var r loop.RunRecord
-		if err := json.Unmarshal(raw, &r); err != nil {
 			continue
 		}
 		n++
@@ -37,6 +32,7 @@ func Write(l paths.Layout) (string, int, error) {
 	body := strings.Join(cards, "\n")
 	page := fmt.Sprintf(`<!doctype html>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
 <title>hbench report</title>
 <style>
   body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 2rem auto; max-width: 52rem; color: #111; }
@@ -85,6 +81,7 @@ func renderRun(r loop.RunRecord) string {
 	if r.FinishedAt != "" {
 		when = r.FinishedAt
 	}
+	idPath := "./" + url.PathEscape(r.ID)
 	return fmt.Sprintf(`<article>
 <h2>%s · quality %.2f</h2>
 <p>%s · %s · %s · %s</p>
@@ -93,7 +90,7 @@ func renderRun(r loop.RunRecord) string {
 </article>`,
 		html.EscapeString(r.ID), q,
 		html.EscapeString(r.ScenarioID), html.EscapeString(r.Harness), html.EscapeString(r.Status), html.EscapeString(when),
-		html.EscapeString(r.ID), html.EscapeString(r.ID),
+		html.EscapeString(idPath), html.EscapeString(idPath),
 		judges.String(),
 	)
 }

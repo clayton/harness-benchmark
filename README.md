@@ -24,7 +24,7 @@ Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 
 | | |
 |---|---|
-| **Status** | v0.4 — Go CLI + operator-controlled runs |
+| **Status** | v0.4.2 — Go CLI + operator-controlled runs |
 | **CLI** | `hbench` |
 | **License** | MIT |
 
@@ -123,6 +123,7 @@ hbench report
 
 - **`hbench execute`** — direct argv launch (no shell interpolation), telemetry parsing, and process-group timeout cleanup.
 - **Local-first runs** — ordinary users choose how to isolate hbench; `hbench sandbox-command` prints a hardened Docker/Podman command and never starts it.
+- **Rooted scenario files** — environment patches and gold overlays cannot traverse or follow symlinks outside their declared roots.
 - **Controlled operator runs** — a trusted operator can validate and execute a private evaluator pack in isolated Docker containers, then upload a signed attestation. This does not run on the Rails host.
 
 ### Judging & reporting
@@ -157,6 +158,8 @@ Hosted execution is not part of v0.4. Controlled runs are started manually on a 
 | `hbench controlled keygen` | Create an operator signing key |
 | `hbench controlled validate ...` | Reproduce base/target behavior twice and sign validation |
 | `hbench controlled run ...` | Run the isolated agent and private evaluator, then sign and upload |
+
+Rider credentials are stored per HTTPS origin. Plain HTTP is rejected except for loopback development when `HB_ALLOW_INSECURE_LOCALHOST=1` is explicitly set, and authenticated publish requests never follow redirects.
 
 ```bash
 hbench

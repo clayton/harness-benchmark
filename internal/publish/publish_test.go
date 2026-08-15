@@ -3,11 +3,13 @@ package publish
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/clayton/harness-benchmark/internal/loop"
@@ -39,6 +41,7 @@ func TestPublishPostsOnlyWhenCalled(t *testing.T) {
 	}))
 	defer srv.Close()
 	t.Setenv("HB_RODEO_URL", srv.URL)
+	t.Setenv("HB_ALLOW_INSECURE_LOCALHOST", "1")
 	rider := filepath.Join(t.TempDir(), "rider.json")
 	t.Setenv("HB_RIDER_FILE", rider)
 
@@ -61,6 +64,132 @@ func TestPublishPostsOnlyWhenCalled(t *testing.T) {
 	}
 	if out["id"] == nil {
 		t.Fatalf("response %+v", out)
+	}
+}
+
+func TestRodeoOriginRequiresHTTPSAndNormalizesDefaults(t *testing.T) {
+	if _, err := normalizeOrigin("http://example.com"); err == nil {
+		t.Fatal("plaintext remote origin accepted")
+	}
+	if _, err := normalizeOrigin("https://agentrodeo.dev/path"); err == nil {
+		t.Fatal("origin with a path accepted")
+	}
+	got, err := normalizeOrigin("HTTPS://AgentRodeo.DEV:443/")
+	if err != nil || got != "https://agentrodeo.dev" {
+		t.Fatalf("normalized origin=%q err=%v", got, err)
+	}
+}
+
+func TestRiderCredentialCannotCrossOriginsAndPermissionsAreRepaired(t *testing.T) {
+	t.Setenv("HB_ALLOW_INSECURE_LOCALHOST", "1")
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("mismatched credential caused a request") }))
+	defer server.Close()
+	origin, err := normalizeOrigin(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "rider.json")
+	t.Setenv("HB_RIDER_FILE", path)
+	if err := os.WriteFile(path, []byte(`{"token":"production","origin":"https://agentrodeo.dev"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensureRider(noRedirectClient(server.Client()), origin); err == nil || !strings.Contains(err.Error(), "origin mismatch") {
+		t.Fatalf("mismatched origin error=%v", err)
+	}
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(`{"token":"local","origin":%q}`, origin)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ensureRider(noRedirectClient(server.Client()), origin); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode=%v err=%v", info.Mode().Perm(), err)
+	}
+}
+
+func TestLegacyRiderMigrationRepairsPermissions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("HB_RIDER_FILE", "")
+	legacy := filepath.Join(home, ".config", "hb", "rider.json")
+	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(legacy, []byte(`{"token":"legacy"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("legacy migration made a network request")
+		return nil, nil
+	})}
+	rider, err := ensureRider(client, defaultRodeoURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rider["token"] != "legacy" || rider["origin"] != defaultRodeoURL {
+		t.Fatalf("rider=%+v", rider)
+	}
+	for _, path := range []string{legacy, RiderFile(defaultRodeoURL)} {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode=%v err=%v", path, info.Mode().Perm(), err)
+		}
+	}
+}
+
+func TestRiderCredentialSymlinkFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.json")
+	path := filepath.Join(dir, "rider.json")
+	if err := os.WriteFile(target, []byte(`{"token":"tok","origin":"https://agentrodeo.dev"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HB_RIDER_FILE", path)
+	if _, err := ensureRider(http.DefaultClient, defaultRodeoURL); err == nil || !strings.Contains(err.Error(), "unsafe rider credential") {
+		t.Fatalf("symlink error=%v", err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestPublishDoesNotFollowRedirectsWithAuthorization(t *testing.T) {
+	var redirected bool
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { redirected = true }))
+	defer target.Close()
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer front.Close()
+	t.Setenv("HB_RODEO_URL", front.URL)
+	t.Setenv("HB_ALLOW_INSECURE_LOCALHOST", "1")
+	origin, err := normalizeOrigin(front.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "rider.json")
+	t.Setenv("HB_RIDER_FILE", path)
+	if err := saveRider(path, map[string]any{"token": "tok", "origin": origin}); err != nil {
+		t.Fatal(err)
+	}
+	l := paths.New(t.TempDir(), t.TempDir())
+	id := "f00df00df00d"
+	if err := os.MkdirAll(l.Worktree(id), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.Save(l, loop.RunRecord{ID: id, Status: "completed", Worktree: l.Worktree(id), Judges: []loop.JudgeScore{{Name: "test"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Publish(l, id, front.Client()); err == nil || !strings.Contains(err.Error(), "rodeo 307") {
+		t.Fatalf("redirect error=%v", err)
+	}
+	if redirected {
+		t.Fatal("authorization-bearing request followed a redirect")
 	}
 }
 

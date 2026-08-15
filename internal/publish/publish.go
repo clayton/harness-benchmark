@@ -2,47 +2,56 @@ package publish
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/clayton/harness-benchmark/internal/loop"
 	"github.com/clayton/harness-benchmark/internal/paths"
 )
 
-func RodeoURL() string {
+const defaultRodeoURL = "https://agentrodeo.dev"
+
+func ValidatedRodeoURL() (string, error) {
 	if u := os.Getenv("HB_RODEO_URL"); u != "" {
-		return u
+		return normalizeOrigin(u)
 	}
-	return "https://agentrodeo.dev"
+	return defaultRodeoURL, nil
 }
 
-func RiderFile() string {
+func RiderFile(origin string) string {
 	if p := os.Getenv("HB_RIDER_FILE"); p != "" {
 		return p
 	}
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".config", "hb", "rider.json")
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(origin)))
+	return filepath.Join(home, ".config", "hb", "riders", digest+".json")
 }
 
 func Publish(l paths.Layout, id string, client *http.Client) (map[string]any, error) {
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+	origin, err := ValidatedRodeoURL()
+	if err != nil {
+		return nil, err
 	}
+	client = noRedirectClient(client)
 	payload, err := BuildPayload(l, id)
 	if err != nil {
 		return nil, err
 	}
-	rider, err := ensureRider(client)
+	rider, err := ensureRider(client, origin)
 	if err != nil {
 		return nil, err
 	}
 	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest(http.MethodPost, RodeoURL()+"/api/v1/runs", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, origin+"/api/v1/runs", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -60,6 +69,42 @@ func Publish(l paths.Layout, id string, client *http.Client) (map[string]any, er
 	var out map[string]any
 	_ = json.Unmarshal(raw, &out)
 	return out, nil
+}
+
+func normalizeOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return "", fmt.Errorf("invalid HB_RODEO_URL origin")
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	hostname := strings.ToLower(parsed.Hostname())
+	if scheme != "https" {
+		local := hostname == "localhost" || net.ParseIP(hostname) != nil && net.ParseIP(hostname).IsLoopback()
+		if scheme != "http" || !local || os.Getenv("HB_ALLOW_INSECURE_LOCALHOST") != "1" {
+			return "", fmt.Errorf("HB_RODEO_URL must use HTTPS (set HB_ALLOW_INSECURE_LOCALHOST=1 only for loopback development)")
+		}
+	}
+	port := parsed.Port()
+	if scheme == "https" && port == "443" || scheme == "http" && port == "80" {
+		port = ""
+	}
+	host := hostname
+	if strings.Contains(hostname, ":") {
+		host = "[" + hostname + "]"
+	}
+	if port != "" {
+		host = net.JoinHostPort(hostname, port)
+	}
+	return (&url.URL{Scheme: scheme, Host: host}).String(), nil
+}
+
+func noRedirectClient(client *http.Client) *http.Client {
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	copy := *client
+	copy.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	return &copy
 }
 
 // BuildPayload constructs the public hb.publish.v1 DTO. It deliberately does
@@ -108,15 +153,36 @@ func BuildPayload(l paths.Layout, id string) (map[string]any, error) {
 	return map[string]any{"schema": "hb.publish.v1", "run": run, "snapshot": snapshot}, nil
 }
 
-func ensureRider(client *http.Client) (map[string]any, error) {
-	path := RiderFile()
-	if raw, err := os.ReadFile(path); err == nil {
+func ensureRider(client *http.Client, origin string) (map[string]any, error) {
+	path := RiderFile(origin)
+	if raw, found, err := readSecureRider(path); err != nil {
+		return nil, err
+	} else if found {
 		var existing map[string]any
 		if json.Unmarshal(raw, &existing) == nil && existing["token"] != nil {
+			if existing["origin"] != origin {
+				return nil, fmt.Errorf("rider credential origin mismatch")
+			}
 			return existing, nil
 		}
 	}
-	req, err := http.NewRequest(http.MethodPost, RodeoURL()+"/api/v1/riders", nil)
+	if os.Getenv("HB_RIDER_FILE") == "" && origin == defaultRodeoURL {
+		home, _ := os.UserHomeDir()
+		legacy := filepath.Join(home, ".config", "hb", "rider.json")
+		if raw, found, err := readSecureRider(legacy); err != nil {
+			return nil, err
+		} else if found {
+			var existing map[string]any
+			if json.Unmarshal(raw, &existing) == nil && existing["token"] != nil {
+				existing["origin"] = origin
+				if err := saveRider(path, existing); err != nil {
+					return nil, err
+				}
+				return existing, nil
+			}
+		}
+	}
+	req, err := http.NewRequest(http.MethodPost, origin+"/api/v1/riders", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -133,12 +199,45 @@ func ensureRider(client *http.Client) (map[string]any, error) {
 	if err := json.Unmarshal(raw, &created); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	pretty, _ := json.MarshalIndent(created, "", "  ")
-	if err := os.WriteFile(path, append(pretty, '\n'), 0o600); err != nil {
+	created["origin"] = origin
+	if err := saveRider(path, created); err != nil {
 		return nil, err
 	}
 	return created, nil
+}
+
+func readSecureRider(path string) ([]byte, bool, error) {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("inspect rider credential: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, false, fmt.Errorf("unsafe rider credential file %q", path)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return nil, false, fmt.Errorf("secure rider credential: %w", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false, fmt.Errorf("read rider credential: %w", err)
+	}
+	return raw, true, nil
+}
+
+func saveRider(path string, rider map[string]any) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return err
+	}
+	pretty, err := json.MarshalIndent(rider, "", "  ")
+	if err != nil {
+		return err
+	}
+	return loop.WriteFileAtomic(path, append(pretty, '\n'), 0o600)
 }
