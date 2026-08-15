@@ -193,16 +193,20 @@ func scenarioFromSnapshot(l paths.Layout, id string) (corpus.Scenario, error) {
 	if err != nil {
 		return corpus.Scenario{}, fmt.Errorf("scenario not found for run %s", id)
 	}
-	var snap struct {
-		Scenario corpus.Scenario `json:"scenario"`
+	var wrap struct {
+		Scenario json.RawMessage `json:"scenario"`
 	}
-	if err := json.Unmarshal(raw, &snap); err != nil {
+	if err := json.Unmarshal(raw, &wrap); err != nil {
 		return corpus.Scenario{}, err
 	}
-	if snap.Scenario.ID == "" {
+	sc, err := corpus.UnmarshalScenarioJSON(wrap.Scenario)
+	if err != nil {
+		return corpus.Scenario{}, err
+	}
+	if sc.ID == "" {
 		return corpus.Scenario{}, fmt.Errorf("scenario not found for run %s", id)
 	}
-	return snap.Scenario, nil
+	return sc, nil
 }
 
 func ResolveRunID(l paths.Layout, id string) (string, error) {

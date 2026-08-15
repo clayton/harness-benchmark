@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -98,6 +99,77 @@ func TestCreateRunAndFinishWithoutExecute(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(l.RunDir(rec.ID), "patch.diff")); err != nil {
 		t.Fatal("patch not written")
+	}
+}
+
+func TestSnapshotRoundTripKeepsPackFields(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	src := filepath.Join(home, "src")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, src)
+	sha := os.Getenv("HB_TEST_SHA")
+	pack := t.TempDir()
+	l := paths.New(home, cwd)
+	l.DataDir = filepath.Join(home, "data")
+	sc := corpus.Scenario{
+		ID:        "pack-demo",
+		Title:     "demo",
+		Prompt:    "fix it",
+		SourceDir: pack,
+		Repo:      corpus.Repo{URL: src, BaseRef: sha},
+		Acceptance: corpus.Acceptance{
+			TestCommands: []string{"bin/rails test"},
+			GoldFiles:    []string{"verification_test.rb"},
+		},
+	}
+	rec, err := CreateRun(l, sc, "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(l.RunDir(rec.ID), "snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snap map[string]any
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		t.Fatal(err)
+	}
+	scJSON, ok := snap["scenario"].(map[string]any)
+	if !ok {
+		t.Fatalf("scenario object missing: %s", raw)
+	}
+	if _, ok := scJSON["Acceptance"]; ok {
+		t.Fatalf("snapshot still uses Acceptance: %s", raw)
+	}
+	if _, ok := scJSON["TestCommands"]; ok {
+		t.Fatalf("snapshot still uses TestCommands: %s", raw)
+	}
+	acc, ok := scJSON["acceptance"].(map[string]any)
+	if !ok {
+		t.Fatalf("scenario.acceptance missing: %s", raw)
+	}
+	cmds, ok := acc["test_commands"].([]any)
+	if !ok || len(cmds) == 0 {
+		t.Fatalf("scenario.acceptance.test_commands empty: %s", raw)
+	}
+	if cmds[0] != "bin/rails test" {
+		t.Fatalf("test_commands=%v", cmds)
+	}
+	if scJSON["source_dir"] != pack {
+		t.Fatalf("source_dir=%v want %s", scJSON["source_dir"], pack)
+	}
+	got, err := scenarioFromSnapshot(l, rec.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "pack-demo" || got.SourceDir != pack {
+		t.Fatalf("reloaded %+v", got)
+	}
+	if len(got.Acceptance.TestCommands) != 1 || got.Acceptance.TestCommands[0] != "bin/rails test" {
+		t.Fatalf("reloaded test_commands=%v", got.Acceptance.TestCommands)
 	}
 }
 

@@ -36,3 +36,5 @@ hbench publish   # optional
 Same for `sec-audit-sweep`.
 
 `hbench` without `--from` will not suggest these. Official chi / commander rides stay the default.
+
+Leftover rides and how to read the published results: [LEFTOVER.md](./LEFTOVER.md).

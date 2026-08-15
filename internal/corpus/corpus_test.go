@@ -68,6 +68,35 @@ func TestOfficialChiYAMLHasGoldAndFailToPass(t *testing.T) {
 	}
 }
 
+func TestUnmarshalScenarioJSONAcceptsLegacyPascalCase(t *testing.T) {
+	legacy := []byte(`{
+  "ID": "pack-demo",
+  "Prompt": "fix it",
+  "SourceDir": "/tmp/pack",
+  "Acceptance": {
+    "TestCommands": ["bin/rails test"],
+    "GoldFiles": ["verification_test.rb"]
+  },
+  "Repo": {"URL": "https://example.com/app.git", "BaseRef": "abc", "EnvironmentPatch": "environment.patch"}
+}`)
+	s, err := UnmarshalScenarioJSON(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.ID != "pack-demo" || s.SourceDir != "/tmp/pack" {
+		t.Fatalf("legacy decode: %+v", s)
+	}
+	if len(s.Acceptance.TestCommands) != 1 || s.Acceptance.TestCommands[0] != "bin/rails test" {
+		t.Fatalf("test_commands=%v", s.Acceptance.TestCommands)
+	}
+	if s.Repo.EnvironmentPatch != "environment.patch" {
+		t.Fatalf("environment_patch=%q", s.Repo.EnvironmentPatch)
+	}
+	if len(s.Acceptance.GoldFiles) != 1 || s.Acceptance.GoldFiles[0] != "verification_test.rb" {
+		t.Fatalf("gold_files=%v", s.Acceptance.GoldFiles)
+	}
+}
+
 func TestResolveLoadsOptionalPackYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "optional", "scenario.yaml")
