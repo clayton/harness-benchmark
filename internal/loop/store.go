@@ -41,15 +41,31 @@ type JudgeScore struct {
 }
 
 type Telemetry struct {
-	WallMS           int      `json:"wall_ms,omitempty"`
-	TokensIn         *int     `json:"tokens_in"`
-	TokensOut        *int     `json:"tokens_out"`
-	EstimatedUSD     *float64 `json:"estimated_usd"`
-	Turns            *int     `json:"turns"`
-	ReasoningTokens  *int     `json:"reasoning_tokens,omitempty"`
-	CacheReadTokens  *int     `json:"cache_read_tokens,omitempty"`
-	CacheWriteTokens *int     `json:"cache_write_tokens,omitempty"`
-	TotalTokens      *int     `json:"total_tokens,omitempty"`
+	WallMS           int           `json:"wall_ms,omitempty"`
+	TokensIn         *int          `json:"tokens_in"`
+	TokensOut        *int          `json:"tokens_out"`
+	EstimatedUSD     *float64      `json:"estimated_usd"`
+	Turns            *int          `json:"turns"`
+	ReasoningTokens  *int          `json:"reasoning_tokens,omitempty"`
+	CacheReadTokens  *int          `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *int          `json:"cache_write_tokens,omitempty"`
+	TotalTokens      *int          `json:"total_tokens,omitempty"`
+	UsageByAgent     *[]AgentUsage `json:"usage_by_agent,omitempty"`
+	CostKind         string        `json:"cost_kind,omitempty"`
+	PriceSnapshot    string        `json:"price_snapshot,omitempty"`
+	Complete         *bool         `json:"complete,omitempty"`
+	TokenComplete    *bool         `json:"token_complete,omitempty"`
+}
+
+type AgentUsage struct {
+	AgentID         string   `json:"agent_id"`
+	Model           string   `json:"model,omitempty"`
+	TokensIn        int      `json:"tokens_in,omitempty"`
+	TokensOut       int      `json:"tokens_out,omitempty"`
+	ReasoningTokens int      `json:"reasoning_tokens,omitempty"`
+	CacheReadTokens int      `json:"cache_read_tokens,omitempty"`
+	TotalTokens     int      `json:"total_tokens,omitempty"`
+	EstimatedUSD    *float64 `json:"estimated_usd,omitempty"`
 }
 
 func NewID() string {

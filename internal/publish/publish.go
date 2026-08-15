@@ -71,6 +71,42 @@ func Publish(l paths.Layout, id string, client *http.Client) (map[string]any, er
 	return out, nil
 }
 
+func AuthenticatedJSON(method, endpoint string, payload any, client *http.Client) (map[string]any, error) {
+	origin, err := ValidatedRodeoURL()
+	if err != nil {
+		return nil, err
+	}
+	client = noRedirectClient(client)
+	rider, err := ensureRider(client, origin)
+	if err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(method, origin+endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+fmt.Sprint(rider["token"]))
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("rodeo %d: %s", resp.StatusCode, raw)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func normalizeOrigin(raw string) (string, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
@@ -124,7 +160,10 @@ func BuildPayload(l paths.Layout, id string) (map[string]any, error) {
 		"tokens_out": rec.Telemetry.TokensOut, "estimated_usd": rec.Telemetry.EstimatedUSD,
 		"turns": rec.Telemetry.Turns, "reasoning_tokens": rec.Telemetry.ReasoningTokens,
 		"cache_read_tokens": rec.Telemetry.CacheReadTokens, "cache_write_tokens": rec.Telemetry.CacheWriteTokens,
-		"total_tokens": rec.Telemetry.TotalTokens,
+		"total_tokens":   rec.Telemetry.TotalTokens,
+		"usage_by_agent": rec.Telemetry.UsageByAgent, "cost_kind": rec.Telemetry.CostKind,
+		"price_snapshot": rec.Telemetry.PriceSnapshot, "complete": rec.Telemetry.Complete,
+		"token_complete": rec.Telemetry.TokenComplete,
 	}
 	workflow, _ := rec.Metadata["workflow"].(string)
 	interaction, _ := rec.Metadata["interaction"].(string)
@@ -139,18 +178,45 @@ func BuildPayload(l paths.Layout, id string) (map[string]any, error) {
 		var source map[string]any
 		if json.Unmarshal(raw, &source) == nil {
 			snapshot["prompt_sha256_16"] = source["prompt_sha256_16"]
+			if study, ok := source["study"].(map[string]any); ok {
+				snapshot["study"] = study
+			}
 			if repo, ok := source["repo"].(map[string]any); ok {
 				snapshot["repo"] = map[string]any{"base_ref": repo["base_ref"], "gold_ref": repo["gold_ref"]}
 			}
 			if config, ok := source["config"].(map[string]any); ok {
-				snapshot["config"] = map[string]any{
+				publicConfig := map[string]any{
 					"id": config["id"], "harness": config["harness"], "model": config["model"],
 					"workflow": config["workflow"], "skills": config["skills"], "interaction": config["interaction"],
 				}
+				if judgeProtocol, _ := config["judge_protocol"].(string); judgeProtocol != "" {
+					publicConfig["judge_protocol"] = judgeProtocol
+				}
+				for _, key := range []string{"harness_version", "provider", "reasoning", "extensions", "plugins", "tools", "subagent_topology", "budget", "environment", "network"} {
+					if meaningfulPublicConfigValue(config[key]) {
+						publicConfig[key] = config[key]
+					}
+				}
+				snapshot["config"] = publicConfig
 			}
 		}
 	}
 	return map[string]any{"schema": "hb.publish.v1", "run": run, "snapshot": snapshot}, nil
+}
+
+func meaningfulPublicConfigValue(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(typed) != ""
+	case []any:
+		return len(typed) > 0
+	case map[string]any:
+		return len(typed) > 0
+	default:
+		return true
+	}
 }
 
 func ensureRider(client *http.Client, origin string) (map[string]any, error) {

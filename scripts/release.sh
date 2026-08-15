@@ -1,9 +1,9 @@
 #!/bin/sh
 # Build pinned hb binaries and SHA256SUMS for a GitHub release.
-# Usage: scripts/release.sh v0.4.2
+# Usage: scripts/release.sh v0.5.0
 set -eu
 
-TAG=${1:?usage: scripts/release.sh v0.4.2}
+TAG=${1:?usage: scripts/release.sh v0.5.0}
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 OUT=${HB_RELEASE_DIR:-"$ROOT/dist/$TAG"}
 mkdir -p "$OUT"
@@ -13,7 +13,7 @@ for pair in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64; do
   os=${pair%/*}
   arch=${pair#*/}
   echo "building hbench-${os}-${arch}"
-  CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -mod=mod -trimpath -ldflags="-s -w" -o "$OUT/hbench-${os}-${arch}" ./cmd/hb
+  CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -buildvcs=false -mod=mod -trimpath -ldflags="-s -w" -o "$OUT/hbench-${os}-${arch}" ./cmd/hb
 done
 
 (

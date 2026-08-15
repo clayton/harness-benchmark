@@ -1,0 +1,5 @@
+interface:
+  display_name: "Run Agent Rodeo Study"
+  short_description: "Design and run fair coding-agent comparisons"
+  brand_color: "#B45309"
+  default_prompt: "Use $run-agent-rodeo-study to turn my question into a fair, budgeted Agent Rodeo study."

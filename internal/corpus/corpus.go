@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -38,6 +39,35 @@ type Acceptance struct {
 	GoldFiles     []string `yaml:"gold_files" json:"gold_files,omitempty"`
 }
 
+type Workspace struct {
+	Kind  string            `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Files map[string]string `yaml:"files,omitempty" json:"files,omitempty"`
+}
+
+// ScaffoldPaths returns deterministic, canonical paths that are safe to
+// materialize before hbench creates its own Git metadata and HB_* files.
+func ScaffoldPaths(files map[string]string) ([]string, error) {
+	paths := make([]string, 0, len(files))
+	seen := make(map[string]bool, len(files))
+	for rel := range files {
+		clean := filepath.Clean(rel)
+		lower := strings.ToLower(clean)
+		if rel != clean || clean == "." || filepath.IsAbs(clean) || clean == ".." ||
+			strings.HasPrefix(clean, ".."+string(filepath.Separator)) ||
+			lower == ".git" || strings.HasPrefix(lower, ".git"+string(filepath.Separator)) ||
+			strings.HasPrefix(strings.ToUpper(filepath.Base(clean)), "HB_") {
+			return nil, fmt.Errorf("unsafe scaffold path %q", rel)
+		}
+		if seen[lower] {
+			return nil, fmt.Errorf("duplicate scaffold path %q", rel)
+		}
+		seen[lower] = true
+		paths = append(paths, clean)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
 type Scenario struct {
 	ID                     string     `yaml:"id" json:"id"`
 	Type                   string     `yaml:"type" json:"type"`
@@ -48,6 +78,7 @@ type Scenario struct {
 	Tags                   []string   `yaml:"tags" json:"tags"`
 	Difficulty             string     `yaml:"difficulty" json:"difficulty"`
 	Repo                   Repo       `yaml:"repo" json:"repo"`
+	Workspace              Workspace  `yaml:"workspace,omitempty" json:"workspace,omitempty"`
 	Acceptance             Acceptance `yaml:"acceptance" json:"acceptance"`
 	SourceDir              string     `yaml:"-" json:"source_dir,omitempty"`
 	Status                 string     `yaml:"status,omitempty" json:"status,omitempty"`
@@ -242,7 +273,7 @@ func decodeRodeoManifest(raw []byte, identifier string) (Scenario, error) {
 	if scenario.ID != identifier {
 		return Scenario{}, fmt.Errorf("rodeo scenario id mismatch: got %q", scenario.ID)
 	}
-	if scenario.Status != "community" && scenario.Status != "active" && scenario.Status != "runnable" {
+	if scenario.Status != "community" && scenario.Status != "candidate" && scenario.Status != "official" && scenario.Status != "active" && scenario.Status != "runnable" {
 		return Scenario{}, fmt.Errorf("rodeo scenario %s is not runnable (status %q)", identifier, scenario.Status)
 	}
 	if !strings.HasPrefix(scenario.Repo.URL, "https://github.com/") {
@@ -251,6 +282,9 @@ func decodeRodeoManifest(raw []byte, identifier string) (Scenario, error) {
 	hex40 := regexp.MustCompile(`^[0-9a-f]{40}$`)
 	if !hex40.MatchString(scenario.Repo.BaseRef) || (scenario.Repo.GoldRef != "" && !hex40.MatchString(scenario.Repo.GoldRef)) {
 		return Scenario{}, fmt.Errorf("rodeo scenario refs must be full lowercase commit hashes")
+	}
+	if scenario.Workspace.Kind != "" && scenario.Workspace.Kind != "scaffold" {
+		return Scenario{}, fmt.Errorf("unsupported workspace kind %q", scenario.Workspace.Kind)
 	}
 	scenario.External = true
 	return scenario, nil

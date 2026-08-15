@@ -27,7 +27,7 @@ func Validate(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath
 	}
 	result := ValidationResult{}
 	for attempt := 1; attempt <= 2; attempt++ {
-		baseDir, cleanupBase, err := checkout(scenario.Repo.URL, scenario.Repo.BaseRef)
+		baseDir, cleanupBase, err := checkoutScenarioBase(scenario)
 		if err != nil {
 			return result, err
 		}
@@ -59,6 +59,42 @@ func Validate(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath
 		return result, fmt.Errorf("evaluator did not reproduce twice: base_failures=%d target_passes=%d", result.BaseFailures, result.TargetPasses)
 	}
 	return result, nil
+}
+
+func checkoutScenarioBase(scenario corpus.Scenario) (string, func(), error) {
+	if scenario.Workspace.Kind != "scaffold" {
+		return checkout(scenario.Repo.URL, scenario.Repo.BaseRef)
+	}
+	dir, err := os.MkdirTemp("", "hbench-controlled-scaffold-")
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	paths, err := corpus.ScaffoldPaths(scenario.Workspace.Files)
+	if err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	for _, clean := range paths {
+		contents := scenario.Workspace.Files[clean]
+		path := filepath.Join(dir, clean)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			cleanup()
+			return "", func() {}, err
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			cleanup()
+			return "", func() {}, err
+		}
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "hbench@local"}, {"config", "user.name", "hbench"}, {"config", "commit.gpgsign", "false"}, {"add", "-A"}, {"commit", "-qm", "hbench scaffold base"}} {
+		command := exec.Command("git", append([]string{"-C", dir}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			cleanup()
+			return "", func() {}, fmt.Errorf("git scaffold: %w: %s", err, output)
+		}
+	}
+	return dir, cleanup, nil
 }
 
 func checkout(repoURL, ref string) (string, func(), error) {

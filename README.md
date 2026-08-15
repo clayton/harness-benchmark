@@ -24,7 +24,7 @@ Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 
 | | |
 |---|---|
-| **Status** | v0.4.2 — Go CLI + operator-controlled runs |
+| **Status** | v0.5.0 — studies, Callouts, and operator-controlled runs |
 | **CLI** | `hbench` |
 | **License** | MIT |
 
@@ -158,6 +158,14 @@ Hosted execution is not part of v0.4. Controlled runs are started manually on a 
 | `hbench controlled keygen` | Create an operator signing key |
 | `hbench controlled validate ...` | Reproduce base/target behavior twice and sign validation |
 | `hbench controlled run ...` | Run the isolated agent and private evaluator, then sign and upload |
+| `hbench study validate STUDY.yaml` | Check an `hb.study.v1` contract and controlled axes |
+| `hbench study plan STUDY.yaml` | Show the matrix, confounds, run count, and post-run stop thresholds |
+| `hbench study run STUDY.yaml --approve-spend` | Run a seeded, sequential, resumable study |
+| `hbench study status STUDY.yaml` | Show completed cells and run IDs |
+| `hbench study publish STUDY.yaml` | Publish complete runs and the immutable Study |
+| `hbench callout create STUDY.yaml --statement "..."` | Publish a testable claim with a frozen contract |
+| `hbench callout challenge URL` | Download and verify a Callout contract |
+| `hbench skill install` | Explicitly install the natural-language study skill |
 
 Rider credentials are stored per HTTPS origin. Plain HTTP is rejected except for loopback development when `HB_ALLOW_INSECURE_LOCALHOST=1` is explicitly set, and authenticated publish requests never follow redirects.
 

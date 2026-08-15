@@ -234,3 +234,32 @@ func TestBuildPayloadExcludesPrivateRunAndSnapshotFields(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildPayloadPublishesFrozenStudyBinding(t *testing.T) {
+	l := paths.New(t.TempDir(), t.TempDir())
+	id := "abcdeffedcba"
+	worktree := l.Worktree(id)
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.Save(l, loop.RunRecord{ID: id, ScenarioID: "task", Status: "completed", Worktree: worktree, Harness: "codex", Model: "sol", CreatedAt: loop.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := `{"study":{"id":"fight","contract_digest":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","arm_id":"a","scenario_id":"rodeo:task@1","repeat":2,"scenario_digest":"ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"},"config":{"id":"a","harness":"codex","harness_version":"codex-cli 1","model":"sol","workflow":"baseline","skills":[],"interaction":"unattended","judge_protocol":"scenario-default","budget":{"max_minutes_per_run":45}}}`
+	if err := os.WriteFile(filepath.Join(l.RunDir(id), "snapshot.json"), []byte(snapshot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := BuildPayload(l, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicSnapshot := payload["snapshot"].(map[string]any)
+	binding := publicSnapshot["study"].(map[string]any)
+	if binding["arm_id"] != "a" || binding["repeat"] != float64(2) {
+		t.Fatalf("study binding=%+v", binding)
+	}
+	config := publicSnapshot["config"].(map[string]any)
+	if config["judge_protocol"] != "scenario-default" || config["harness_version"] != "codex-cli 1" {
+		t.Fatalf("study config=%+v", config)
+	}
+}

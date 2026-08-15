@@ -187,6 +187,14 @@ func TestHeadlessCommandKnownHarnesses(t *testing.T) {
 	}
 }
 
+func TestClaudeLaunchPinsModel(t *testing.T) {
+	got := HeadlessLaunchProfile(Profile{Harness: "claude", Model: "claude-sonnet-4-5"}, "prompt")
+	joined := strings.Join(got.Args, " ")
+	if got.Program != "claude" || !strings.Contains(joined, "--model claude-sonnet-4-5") {
+		t.Fatalf("claude launch did not pin model: %+v", got)
+	}
+}
+
 func TestHeadlessLaunchNeverBuildsAShellCommand(t *testing.T) {
 	if got := HeadlessLaunch("pi", "model; touch /tmp/pwned", "prompt"); got.Program != "" {
 		t.Fatalf("unsafe model accepted: %+v", got)
@@ -195,6 +203,54 @@ func TestHeadlessLaunchNeverBuildsAShellCommand(t *testing.T) {
 	got := HeadlessLaunch("codex", "gpt-5", prompt)
 	if got.Program != "codex" || got.Args[len(got.Args)-1] != prompt {
 		t.Fatalf("prompt was not preserved as one argv value: %+v", got)
+	}
+}
+
+func TestCodexTopologyLocksChildModelEffortAndCount(t *testing.T) {
+	profile := Profile{Harness: "codex", Provider: "openai", Model: "gpt-5.6-sol", Workflow: "codex-subagents", Subagents: "5x:gpt-5.6-luna:ultra"}
+	if err := ValidateMeasuredProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	launch := HeadlessLaunchProfile(profile, "fix it")
+	joined := strings.Join(launch.Args, " ")
+	for _, want := range []string{"agents.max_concurrent_threads_per_session=5", `agents.default_subagent_model="gpt-5.6-luna"`, `agents.default_subagent_reasoning_effort="ultra"`} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("launch missing %q: %+v", want, launch)
+		}
+	}
+}
+
+func TestCodexTopologyNeedsExactChildUsage(t *testing.T) {
+	profile := Profile{Harness: "codex", Subagents: "2x:gpt-5.6-luna:ultra"}
+	usage := []AgentUsage{{AgentID: "parent"}, {AgentID: "child-1", Model: "gpt-5.6-luna"}}
+	if profileChildUsageComplete(profile, Telemetry{UsageByAgent: &usage}) {
+		t.Fatal("missing child was accepted")
+	}
+	usage = append(usage, AgentUsage{AgentID: "child-2", Model: "wrong-model"})
+	if profileChildUsageComplete(profile, Telemetry{UsageByAgent: &usage}) {
+		t.Fatal("wrong child model was accepted")
+	}
+	usage[2].Model = "gpt-5.6-luna"
+	if !profileChildUsageComplete(profile, Telemetry{UsageByAgent: &usage}) {
+		t.Fatal("exact child usage was rejected")
+	}
+}
+
+func TestResolveMeasuredPiPackageUsesExactInstalledVersion(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("PI_CODING_AGENT_DIR", root)
+	packageRoot := filepath.Join(root, "npm", "node_modules", "pi-subagents")
+	writeFile(t, filepath.Join(packageRoot, "package.json"), `{"name":"pi-subagents","version":"0.50.0","pi":{"extensions":["./index.ts"]}}`)
+	writeFile(t, filepath.Join(packageRoot, "index.ts"), "export default {}\n")
+	resolved, err := ResolveMeasuredProfile(Profile{Harness: "pi", Provider: "openrouter", Model: "openai/gpt-5.6-sol", Plugins: []string{"pi-subagents@0.50.0"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved.Plugins) != 1 || resolved.Plugins[0] != filepath.Join(packageRoot, "index.ts") {
+		t.Fatalf("resolved=%+v", resolved.Plugins)
+	}
+	if _, err := ResolveMeasuredProfile(Profile{Harness: "pi", Provider: "openrouter", Model: "openai/gpt-5.6-sol", Plugins: []string{"pi-subagents@0.49.0"}}); err == nil {
+		t.Fatal("package version drift was accepted")
 	}
 }
 
@@ -420,6 +476,25 @@ func TestPrepareWorktreeOfficialChiHasSourceFiles(t *testing.T) {
 		if info.Size() == 0 {
 			t.Fatalf("official chi %s is empty", rel)
 		}
+	}
+}
+
+func TestPrepareScaffoldCreatesCleanRepositoryAndRejectsEscapes(t *testing.T) {
+	l := paths.New(t.TempDir(), t.TempDir())
+	sc := corpus.Scenario{Title: "Scaffold", Prompt: "Build it", Workspace: corpus.Workspace{Kind: "scaffold", Files: map[string]string{"PLAN.md": "Do the work\n"}}}
+	workspace, err := PrepareWorktree(l, sc, "aaaabbbbcccc", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(filepath.Join(workspace, "PLAN.md")); err != nil || string(raw) != "Do the work\n" {
+		t.Fatalf("raw=%q err=%v", raw, err)
+	}
+	if err := exec.Command("git", "-C", workspace, "rev-parse", "HEAD").Run(); err != nil {
+		t.Fatal(err)
+	}
+	sc.Workspace.Files = map[string]string{"../escape": "bad"}
+	if _, err := PrepareWorktree(l, sc, "ddddeeeeffff", false); err == nil {
+		t.Fatal("expected unsafe path rejection")
 	}
 }
 

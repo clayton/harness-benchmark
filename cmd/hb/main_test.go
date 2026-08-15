@@ -104,6 +104,28 @@ func TestExternalScenarioRefusesUnattendedInput(t *testing.T) {
 	}
 }
 
+func TestStudyRefusesUntrustedExternalScenarioBeforeExecution(t *testing.T) {
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer read.Close()
+	defer write.Close()
+	old := os.Stdin
+	os.Stdin = read
+	t.Cleanup(func() { os.Stdin = old })
+
+	l := paths.New(t.TempDir(), t.TempDir())
+	scenario := corpus.Scenario{ID: "rodeo:community@1", External: true, Acceptance: corpus.Acceptance{SetupCommands: []string{"touch should-not-run"}}}
+	err = authorizeResolvedStudyScenarios(l, []corpus.Scenario{scenario})
+	if err == nil || !strings.Contains(err.Error(), "external scenario is not trusted") {
+		t.Fatalf("expected study trust refusal, got %v", err)
+	}
+	if _, statErr := os.Stat("should-not-run"); !os.IsNotExist(statErr) {
+		t.Fatalf("external setup command ran before trust: %v", statErr)
+	}
+}
+
 func TestPublishHelpDoesNotUpload(t *testing.T) {
 	out := capture(t, []string{"publish", "--help"})
 	if !strings.Contains(out, "privacy-filtered run") {

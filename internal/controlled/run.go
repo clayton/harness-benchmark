@@ -47,7 +47,7 @@ func Run(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath, rel
 	if err != nil {
 		return RunResult{}, err
 	}
-	workspace, cleanupWorkspace, err := checkout(scenario.Repo.URL, scenario.Repo.BaseRef)
+	workspace, cleanupWorkspace, err := checkoutScenarioBase(scenario)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -122,6 +122,7 @@ func Run(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath, rel
 		return RunResult{}, err
 	}
 
+	_ = exec.Command("git", "-C", workspace, "add", "-N", "-A").Run()
 	patchRaw, _ := exec.Command("git", "-C", workspace, "diff", "--binary", "HEAD").Output()
 	judgeOutput, judgeErr := dockerRun(ctx, "none", workspace, packPath, pack.EnvironmentImageDigest, pack.EvaluatorCommands, nil)
 	passed := judgeErr == nil && len(strings.TrimSpace(string(patchRaw))) > 0

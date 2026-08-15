@@ -200,3 +200,21 @@ test "$(cat "$workspace/result.txt")" = fixed
 		t.Fatalf("unexpected validation %s", raw)
 	}
 }
+
+func TestScaffoldBaseIsACommittedRepository(t *testing.T) {
+	dir, cleanup, err := checkoutScenarioBase(corpus.Scenario{Workspace: corpus.Workspace{Kind: "scaffold", Files: map[string]string{"PLAN.md": "build it\n"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	if err := os.WriteFile(filepath.Join(dir, "new.rs"), []byte("fn main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := exec.Command("git", "-C", dir, "add", "-N", "-A").Run(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := exec.Command("git", "-C", dir, "diff", "HEAD").Output()
+	if err != nil || !strings.Contains(string(raw), "new.rs") {
+		t.Fatalf("diff=%s err=%v", raw, err)
+	}
+}

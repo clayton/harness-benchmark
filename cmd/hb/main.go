@@ -19,9 +19,10 @@ import (
 	"github.com/clayton/harness-benchmark/internal/publish"
 	"github.com/clayton/harness-benchmark/internal/report"
 	"github.com/clayton/harness-benchmark/internal/trust"
+	"github.com/clayton/harness-benchmark/skills"
 )
 
-const version = "0.4.2"
+const version = "0.5.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -63,6 +64,12 @@ func run(args []string) error {
 		return cmdSandboxCommand(args[1:])
 	case "controlled":
 		return cmdControlled(args[1:])
+	case "study":
+		return cmdStudy(args[1:])
+	case "callout":
+		return cmdCallout(args[1:])
+	case "skill":
+		return cmdSkill(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage())
 	}
@@ -190,7 +197,40 @@ Commands:
   hbench trust -s <scenario>
   hbench sandbox-command -s <scenario> --harness <name> --image <name@sha256:digest>
   hbench controlled keygen|validate|run
+  hbench study validate|plan|run|status|publish STUDY.yaml
+  hbench callout create STUDY.yaml --statement "..."
+  hbench callout challenge <url>
+  hbench skill install [--target DIR]
 `
+}
+
+func cmdSkill(args []string) error {
+	if len(args) == 0 || args[0] != "install" {
+		return fmt.Errorf("usage: hbench skill install [--target DIR]")
+	}
+	fs := flag.NewFlagSet("skill install", flag.ContinueOnError)
+	target := fs.String("target", "", "directory that contains installed skills")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if *target == "" {
+		home, _ := os.UserHomeDir()
+		var detected []string
+		for _, candidate := range []string{filepath.Join(home, ".codex", "skills"), filepath.Join(home, ".agents", "skills"), filepath.Join(home, ".claude", "skills"), filepath.Join(home, ".pi", "agent", "skills")} {
+			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+				detected = append(detected, candidate)
+			}
+		}
+		if len(detected) == 0 {
+			return fmt.Errorf("no skill root detected; rerun with --target DIR")
+		}
+		return fmt.Errorf("choose a detected skill root with --target:\n  %s", strings.Join(detected, "\n  "))
+	}
+	if err := skills.Install(*target); err != nil {
+		return err
+	}
+	fmt.Printf("Installed run-agent-rodeo-study at %s\n", filepath.Join(*target, "run-agent-rodeo-study"))
+	return nil
 }
 
 func wantsHelp(args []string) bool {

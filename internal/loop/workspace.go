@@ -77,6 +77,9 @@ func fetchRef(repo, ref string) error {
 }
 
 func PrepareWorktree(l paths.Layout, sc corpus.Scenario, runID string, runSetup bool) (string, error) {
+	if sc.Workspace.Kind == "scaffold" {
+		return prepareScaffold(l, sc, runID, runSetup)
+	}
 	cache, err := ensureRepo(l, sc)
 	if err != nil {
 		return "", err
@@ -120,6 +123,57 @@ func PrepareWorktree(l paths.Layout, sc corpus.Scenario, runID string, runSetup 
 			c.Env = minimalCommandEnv()
 			if out, err := c.CombinedOutput(); err != nil {
 				return "", fmt.Errorf("setup %q: %w\n%s", cmd, err, out)
+			}
+		}
+	}
+	return dest, nil
+}
+
+func prepareScaffold(l paths.Layout, sc corpus.Scenario, runID string, runSetup bool) (string, error) {
+	dest := l.Worktree(runID)
+	if err := os.RemoveAll(dest); err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return "", err
+	}
+	paths, err := corpus.ScaffoldPaths(sc.Workspace.Files)
+	if err != nil {
+		return "", err
+	}
+	for _, clean := range paths {
+		contents := sc.Workspace.Files[clean]
+		path := filepath.Join(dest, clean)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+			return "", err
+		}
+	}
+	if err := git(dest, "init", "-q"); err != nil {
+		return "", err
+	}
+	_ = git(dest, "config", "user.email", "hbench@local")
+	_ = git(dest, "config", "user.name", "hbench")
+	_ = git(dest, "config", "commit.gpgsign", "false")
+	if err := git(dest, "add", "-A"); err != nil {
+		return "", err
+	}
+	if err := git(dest, "commit", "--no-verify", "-m", "hbench: scaffold scenario"); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(dest, "HB_PROMPT.txt"), []byte(strings.TrimSpace(sc.Prompt)+"\n"), 0o644); err != nil {
+		return "", err
+	}
+	_ = os.WriteFile(filepath.Join(dest, "HB_RUN.md"), []byte(fmt.Sprintf("# %s\n\nRead HB_PROMPT.txt and implement the plan in this repository.\n\nThen run: hbench finish %s\n", sc.Title, runID)), 0o644)
+	if runSetup {
+		for _, line := range sc.Acceptance.SetupCommands {
+			c := exec.Command("sh", "-c", line)
+			c.Dir = dest
+			c.Env = minimalCommandEnv()
+			if out, err := c.CombinedOutput(); err != nil {
+				return "", fmt.Errorf("setup %q: %w\n%s", line, err, out)
 			}
 		}
 	}
@@ -173,6 +227,9 @@ func applyEnvironmentPatch(dest string, sc corpus.Scenario) error {
 }
 
 func gitDiff(worktree string) (string, error) {
+	if err := git(worktree, "add", "-N", "-A"); err != nil {
+		return "", err
+	}
 	cmd := exec.Command("git", "-C", worktree, "diff", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {

@@ -30,7 +30,16 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("read run prompt: %w", err)
 	}
-	launch := HeadlessLaunch(rec.Harness, rec.Model, strings.TrimSpace(string(promptRaw)))
+	profile := Profile{Harness: rec.Harness, Model: rec.Model}
+	if raw, ok := rec.Metadata["profile"]; ok {
+		encoded, _ := json.Marshal(raw)
+		_ = json.Unmarshal(encoded, &profile)
+	}
+	resolvedProfile, resolveErr := ResolveMeasuredProfile(profile)
+	if resolveErr != nil {
+		return ExecResult{}, resolveErr
+	}
+	launch := HeadlessLaunchProfile(resolvedProfile, strings.TrimSpace(string(promptRaw)))
 	if launch.Program == "" {
 		if rec.Model != "" && !modelIDPattern.MatchString(rec.Model) {
 			return ExecResult{}, fmt.Errorf("invalid model id %q", rec.Model)
@@ -40,13 +49,20 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	if _, err := os.Stat(rec.Worktree); err != nil {
 		return ExecResult{}, fmt.Errorf("workspace missing: %s", rec.Worktree)
 	}
-	if rec.HarnessVersion == "" {
-		rec.HarnessVersion = detectHarnessVersion(rec.Harness)
+	actualVersion := DetectHarnessVersion(rec.Harness)
+	if actualVersion == "" {
+		return ExecResult{}, fmt.Errorf("could not resolve %s harness version", rec.Harness)
 	}
+	if rec.HarnessVersion != "" && rec.HarnessVersion != actualVersion {
+		return ExecResult{}, fmt.Errorf("%s harness version drift: contract has %q, installed binary is %q", rec.Harness, rec.HarnessVersion, actualVersion)
+	}
+	rec.HarnessVersion = actualVersion
 	if rec.Metadata == nil {
 		rec.Metadata = map[string]any{}
 	}
-	rec.Metadata["budget"] = map[string]any{"max_minutes": int(timeout.Minutes())}
+	budget := cloneAnyMap(profile.Budget)
+	budget["max_minutes_per_run"] = int(timeout.Minutes())
+	rec.Metadata["budget"] = budget
 	updateSnapshotExecution(l, rec, timeout)
 	rec.Status = "running"
 	_ = Save(l, rec)
@@ -59,6 +75,12 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 
 	cmd := exec.Command(launch.Program, launch.Args...)
 	cmd.Dir = rec.Worktree
+	harnessEnv, envErr := isolatedHarnessEnv(l, rec)
+	if envErr != nil {
+		_ = logF.Close()
+		return ExecResult{}, envErr
+	}
+	cmd.Env = append(append(minimalCommandEnv(), harnessEnv...), launch.Env...)
 	cmd.Stdout = logF
 	cmd.Stderr = logF
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -93,6 +115,11 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	wall := int(time.Since(start).Milliseconds())
 	closeErr := logF.Close()
 	rec.Telemetry = ExtractTelemetry(rec.Harness, logPath)
+	if !profileChildUsageComplete(profile, rec.Telemetry) {
+		complete := false
+		rec.Telemetry.Complete = &complete
+		rec.Telemetry.TokenComplete = &complete
+	}
 	rec.Telemetry.WallMS = wall
 	if timedOut {
 		rec.Status = "timeout"
@@ -118,10 +145,94 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	return ExecResult{ReturnCode: rc, WallMS: wall, LogPath: logPath, TimedOut: timedOut}, waitErr
 }
 
-func detectHarnessVersion(harness string) string {
+func isolatedHarnessEnv(l paths.Layout, rec RunRecord) ([]string, error) {
+	dir := filepath.Join(l.RunDir(rec.ID), "harness-home")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	xdg := filepath.Join(dir, ".config")
+	if err := os.MkdirAll(xdg, 0o700); err != nil {
+		return nil, err
+	}
+	base := []string{"HOME=" + dir, "XDG_CONFIG_HOME=" + xdg, "XDG_DATA_HOME=" + filepath.Join(dir, ".local", "share")}
+	home, _ := os.UserHomeDir()
+	switch rec.Harness {
+	case "codex":
+		codexHome := filepath.Join(dir, "codex")
+		if err := os.MkdirAll(codexHome, 0o700); err != nil {
+			return nil, err
+		}
+		if err := copyAuthFile(filepath.Join(home, ".codex", "auth.json"), filepath.Join(codexHome, "auth.json")); err != nil {
+			return nil, err
+		}
+		return append(base, "CODEX_HOME="+codexHome), nil
+	case "pi":
+		piHome := filepath.Join(dir, "pi")
+		if err := os.MkdirAll(piHome, 0o700); err != nil {
+			return nil, err
+		}
+		if err := copyAuthFile(filepath.Join(home, ".pi", "agent", "auth.json"), filepath.Join(piHome, "auth.json")); err != nil {
+			return nil, err
+		}
+		return append(base, "PI_CODING_AGENT_DIR="+piHome, "PI_CODING_AGENT_SESSION_DIR="+filepath.Join(piHome, "sessions")), nil
+	case "cursor":
+		if err := copyJSONFields(filepath.Join(home, ".cursor", "cli-config.json"), filepath.Join(dir, ".cursor", "cli-config.json"), "authInfo"); err != nil {
+			return nil, err
+		}
+		return base, nil
+	case "claude":
+		if err := copyJSONFields(filepath.Join(home, ".claude.json"), filepath.Join(dir, ".claude.json"), "oauthAccount", "hasCompletedOnboarding", "userID"); err != nil {
+			return nil, err
+		}
+		return base, nil
+	default:
+		return base, nil
+	}
+}
+
+func copyAuthFile(source, dest string) error {
+	raw, err := os.ReadFile(source)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return WriteFileAtomic(dest, raw, 0o600)
+}
+
+func copyJSONFields(source, dest string, fields ...string) error {
+	raw, err := os.ReadFile(source)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var input map[string]any
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return fmt.Errorf("parse auth metadata %s: %w", source, err)
+	}
+	output := map[string]any{}
+	for _, field := range fields {
+		if value, ok := input[field]; ok {
+			output[field] = value
+		}
+	}
+	encoded, err := json.Marshal(output)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		return err
+	}
+	return WriteFileAtomic(dest, append(encoded, '\n'), 0o600)
+}
+
+func DetectHarnessVersion(harness string) string {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	raw, err := exec.CommandContext(ctx, harness, "--version").Output()
+	raw, err := exec.CommandContext(ctx, harnessProgram(harness), "--version").Output()
 	if err != nil {
 		return ""
 	}
@@ -150,9 +261,59 @@ func updateSnapshotExecution(l paths.Layout, rec RunRecord, timeout time.Duratio
 	if rec.HarnessVersion != "" {
 		config["harness_version"] = rec.HarnessVersion
 	}
-	config["budget"] = map[string]any{"max_minutes": int(timeout.Minutes())}
+	profile := Profile{}
+	if raw, ok := rec.Metadata["profile"]; ok {
+		encoded, _ := json.Marshal(raw)
+		_ = json.Unmarshal(encoded, &profile)
+	}
+	budget := cloneAnyMap(profile.Budget)
+	budget["max_minutes_per_run"] = int(timeout.Minutes())
+	config["budget"] = budget
 	updated, err := json.MarshalIndent(snapshot, "", "  ")
 	if err == nil {
 		_ = WriteFileAtomic(path, append(updated, '\n'), 0o644)
 	}
+}
+
+func cloneAnyMap(source map[string]any) map[string]any {
+	copy := make(map[string]any, len(source)+1)
+	for key, value := range source {
+		copy[key] = value
+	}
+	return copy
+}
+
+func profileNeedsChildUsage(profile Profile) bool {
+	if profile.Subagents != "" {
+		return true
+	}
+	for _, plugin := range profile.Plugins {
+		if strings.Contains(strings.ToLower(plugin), "subagent") {
+			return true
+		}
+	}
+	return false
+}
+
+func profileChildUsageComplete(profile Profile, telemetry Telemetry) bool {
+	if !profileNeedsChildUsage(profile) {
+		return true
+	}
+	if telemetry.UsageByAgent == nil {
+		return false
+	}
+	usage := *telemetry.UsageByAgent
+	if profile.Subagents == "" {
+		return len(usage) >= 2
+	}
+	count, model, _, ok := parseCodexTopology(profile.Subagents)
+	if !ok || len(usage) != count+1 {
+		return false
+	}
+	for _, child := range usage[1:] {
+		if child.Model != model {
+			return false
+		}
+	}
+	return true
 }

@@ -25,6 +25,7 @@ func Finish(l paths.Layout, id string, sc corpus.Scenario, wallMS int, notes str
 	if AlreadyScored(rec) && !force {
 		return rec, nil
 	}
+	terminalExecutionStatus := rec.Status
 	diff, err := gitDiff(rec.Worktree)
 	if err != nil {
 		diff = ""
@@ -104,6 +105,9 @@ func Finish(l paths.Layout, id string, sc corpus.Scenario, wallMS int, notes str
 		rec.Status = "completed"
 	} else {
 		rec.Status = "failed"
+	}
+	if terminalExecutionStatus == "timeout" || terminalExecutionStatus == "failed" || terminalExecutionStatus == "budget_exceeded" {
+		rec.Status = terminalExecutionStatus
 	}
 	if err := Save(l, rec); err != nil {
 		return rec, err

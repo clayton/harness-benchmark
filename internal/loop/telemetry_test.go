@@ -56,6 +56,57 @@ not json
 	assertIntPointer(t, "turns", got.Turns, 2)
 	assertIntPointer(t, "total", got.TotalTokens, 90)
 	assertFloatPointer(t, "cost", got.EstimatedUSD, 0.08)
+	if got.CostKind != "estimated" || got.Complete == nil || *got.Complete {
+		t.Fatalf("Pi catalog cost must stay incomplete estimated telemetry: %+v", got)
+	}
+}
+
+func TestExtractPiTelemetryAggregatesSubagentResults(t *testing.T) {
+	path := writeTelemetryFixture(t, `{"type":"message_end","message":{"usage":{"totalTokens":40,"input":12,"output":3,"cost":{"total":0.05}}}}
+{"type":"tool_result","details":{"results":[{"runId":"child-123","model":"gpt-5.6-luna","totalTokens":50,"totalCost":0.2}]}}`)
+	got := ExtractTelemetry("pi", path)
+	assertIntPointer(t, "total", got.TotalTokens, 90)
+	assertFloatPointer(t, "cost", got.EstimatedUSD, 0.25)
+	if got.Complete == nil || *got.Complete || got.UsageByAgent == nil || len(*got.UsageByAgent) != 2 {
+		t.Fatalf("subagent telemetry=%+v", got)
+	}
+	if (*got.UsageByAgent)[1].TotalTokens != 50 || (*got.UsageByAgent)[1].Model != "gpt-5.6-luna" {
+		t.Fatalf("child usage=%+v", (*got.UsageByAgent)[1])
+	}
+}
+
+func TestExtractCursor202608ResultTelemetry(t *testing.T) {
+	path := writeTelemetryFixture(t, `{"type":"result","usage":{"inputTokens":12,"outputTokens":3,"cacheReadTokens":7,"cacheWriteTokens":2}}`)
+	got := ExtractTelemetry("cursor", path)
+	assertIntPointer(t, "tokens in", got.TokensIn, 12)
+	assertIntPointer(t, "tokens out", got.TokensOut, 3)
+	assertIntPointer(t, "cache read", got.CacheReadTokens, 7)
+	assertIntPointer(t, "cache write", got.CacheWriteTokens, 2)
+	if got.Complete == nil || *got.Complete || got.EstimatedUSD != nil {
+		t.Fatalf("Cursor result has tokens but no dollar cost: %+v", got)
+	}
+}
+
+func TestTelemetryWithoutTokenFieldsIsIncomplete(t *testing.T) {
+	for _, fixture := range []struct {
+		harness string
+		log     string
+	}{
+		{"pi", `{"type":"message_end","message":{"usage":{"cost":{"total":0.01}}}}`},
+		{"cursor", `{"usage":{"cost_usd":0.01}}`},
+		{"grok", `{"costUSD":0.01}`},
+	} {
+		got := ExtractTelemetry(fixture.harness, writeTelemetryFixture(t, fixture.log))
+		if got.Complete == nil || *got.Complete {
+			t.Fatalf("%s telemetry should be explicitly incomplete: %+v", fixture.harness, got)
+		}
+	}
+}
+
+func TestFallbackTotalDoesNotDoubleCountCacheOrReasoning(t *testing.T) {
+	tokensIn, tokensOut, cache, reasoning := 100, 20, 80, 10
+	got := withTotalTokens(Telemetry{TokensIn: &tokensIn, TokensOut: &tokensOut, CacheReadTokens: &cache, ReasoningTokens: &reasoning})
+	assertIntPointer(t, "total", got.TotalTokens, 120)
 }
 
 func TestExtractTelemetryIsBestEffort(t *testing.T) {
@@ -130,7 +181,7 @@ printf '%s\n' '{"usage":{"input_tokens":10,"output_tokens":2},"modelUsage":{"gro
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(snapshotRaw), `"max_minutes": 45`) {
+	if !strings.Contains(string(snapshotRaw), `"max_minutes_per_run": 45`) {
 		t.Fatalf("snapshot missing execution budget: %s", snapshotRaw)
 	}
 	if saved.Telemetry.WallMS < 0 {
