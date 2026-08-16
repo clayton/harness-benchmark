@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -102,6 +103,7 @@ type Scenario struct {
 	Status                 string       `yaml:"status,omitempty" json:"status,omitempty"`
 	Version                int          `yaml:"version,omitempty" json:"version,omitempty"`
 	ManifestDigest         string       `yaml:"manifest_digest,omitempty" json:"manifest_digest,omitempty"`
+	BuiltinScenarioID      string       `yaml:"-" json:"builtin_scenario_id,omitempty"`
 	ProtocolID             string       `yaml:"protocol_id,omitempty" json:"protocol_id,omitempty"`
 	NetworkPolicy          string       `yaml:"network_policy,omitempty" json:"network_policy,omitempty"`
 	EnvironmentImageDigest string       `yaml:"environment_image_digest,omitempty" json:"environment_image_digest,omitempty"`
@@ -246,7 +248,11 @@ func FetchRodeo(cacheDir, identifier string, client *http.Client) (Scenario, err
 	}
 	if cached {
 		raw, _ := os.ReadFile(cachePath)
-		return decodeRodeoManifest(raw, identifier)
+		scenario, decodeErr := decodeRodeoManifest(raw, identifier)
+		if decodeErr != nil {
+			return Scenario{}, decodeErr
+		}
+		return hydrateBuiltinScenario(cacheDir, identifier, scenario)
 	}
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
@@ -276,7 +282,7 @@ func FetchRodeo(cacheDir, identifier string, client *http.Client) (Scenario, err
 	if err := os.MkdirAll(dir, 0o755); err == nil {
 		_ = os.WriteFile(cachePath, append(raw, '\n'), 0o644)
 	}
-	return scenario, nil
+	return hydrateBuiltinScenario(cacheDir, identifier, scenario)
 }
 
 func decodeRodeoManifest(raw []byte, identifier string) (Scenario, error) {
@@ -287,7 +293,7 @@ func decodeRodeoManifest(raw []byte, identifier string) (Scenario, error) {
 	claimed := fmt.Sprint(manifest["manifest_digest"])
 	digestible := make(map[string]any, len(manifest))
 	for key, value := range manifest {
-		if key != "manifest_digest" && key != "status" {
+		if key != "manifest_digest" && key != "status" && key != "builtin_scenario_id" {
 			digestible[key] = value
 		}
 	}
@@ -322,6 +328,33 @@ func decodeRodeoManifest(raw []byte, identifier string) (Scenario, error) {
 	}
 	scenario.External = true
 	return scenario, nil
+}
+
+func hydrateBuiltinScenario(cacheDir, identifier string, remote Scenario) (Scenario, error) {
+	if remote.BuiltinScenarioID == "" {
+		return remote, nil
+	}
+	slug := strings.SplitN(identifier, "@", 2)[0]
+	if remote.BuiltinScenarioID != slug {
+		return Scenario{}, fmt.Errorf("rodeo built-in scenario id mismatch")
+	}
+	local, err := Find(cacheDir, remote.BuiltinScenarioID)
+	if err != nil {
+		return Scenario{}, fmt.Errorf("this hbench release does not contain built-in scenario %q", remote.BuiltinScenarioID)
+	}
+	if local.Prompt != remote.Prompt || local.Repo.URL != remote.Repo.URL || local.Repo.BaseRef != remote.Repo.BaseRef ||
+		!reflect.DeepEqual(local.Acceptance.SetupCommands, remote.Acceptance.SetupCommands) ||
+		!reflect.DeepEqual(local.Acceptance.TestCommands, remote.Acceptance.TestCommands) ||
+		!reflect.DeepEqual(local.Requirements, remote.Requirements) || !reflect.DeepEqual(local.Fetches, remote.Fetches) {
+		return Scenario{}, fmt.Errorf("built-in scenario %q does not match the published version; update hbench", remote.BuiltinScenarioID)
+	}
+	local.ID = identifier
+	local.Status = remote.Status
+	local.Version = remote.Version
+	local.ManifestDigest = remote.ManifestDigest
+	local.BuiltinScenarioID = remote.BuiltinScenarioID
+	local.External = false
+	return local, nil
 }
 
 // TrustDigest binds approval to the complete executable scenario plus any

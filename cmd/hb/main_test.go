@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/clayton/harness-benchmark/internal/corpus"
+	"github.com/clayton/harness-benchmark/internal/loop"
 	"github.com/clayton/harness-benchmark/internal/paths"
 )
 
@@ -138,6 +139,23 @@ func TestListScenariosFromEmbeddedCorpus(t *testing.T) {
 	out := capture(t, []string{"list", "scenarios"})
 	if !bytes.Contains([]byte(out), []byte("js-commander-negative-exp-E")) {
 		t.Fatalf("list:\n%s", out)
+	}
+}
+
+func TestListRunsShowsStatusIdentityAndNextAction(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HB_DATA_DIR", filepath.Join(root, "data"))
+	t.Setenv("HB_OUT_DIR", filepath.Join(root, "out"))
+	l := layout()
+	rec := loop.RunRecord{ID: "aabbccddeeff", ScenarioID: "task", Status: "pending", Worktree: l.Worktree("aabbccddeeff"), Harness: "pi", Model: "gpt-5.6-sol", CreatedAt: loop.Now()}
+	if err := loop.Save(l, rec); err != nil {
+		t.Fatal(err)
+	}
+	out := capture(t, []string{"list", "runs"})
+	for _, want := range []string{"aabbccddeeff", "pending", "task", "pi/gpt-5.6-sol", "hbench execute aabbccddeeff"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q:\n%s", want, out)
+		}
 	}
 }
 

@@ -83,3 +83,36 @@ func TestNormalizeDirectPiProfile(t *testing.T) {
 		t.Fatal("provider conflict was accepted")
 	}
 }
+
+func TestNormalizeDirectProfileRecordsDefaults(t *testing.T) {
+	pi, err := NormalizeDirectProfile(Profile{Harness: "pi", Provider: "openai", Model: "gpt-5.6-sol"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pi.Reasoning != "default" {
+		t.Fatalf("Pi reasoning=%q", pi.Reasoning)
+	}
+	codex, err := NormalizeDirectProfile(Profile{Harness: "codex", Model: "gpt-5.6-sol"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codex.Provider != "openai" || codex.Reasoning != "default" {
+		t.Fatalf("Codex profile=%+v", codex)
+	}
+}
+
+func TestDetectHarnessIdentityReportsResolvedExecutable(t *testing.T) {
+	bin := t.TempDir()
+	piPath := filepath.Join(bin, "pi")
+	if err := os.WriteFile(piPath, []byte("#!/bin/sh\necho 0.84.2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	identity, err := DetectHarnessIdentity("pi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.Path != piPath || identity.Version != "0.84.2" {
+		t.Fatalf("identity=%+v", identity)
+	}
+}

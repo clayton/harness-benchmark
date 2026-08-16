@@ -24,7 +24,7 @@ Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 
 | | |
 |---|---|
-| **Status** | v0.5.2 — explicit prerequisites and consented benchmark fetches |
+| **Status** | v0.5.3 — complete direct-ride identity and uniform scenario manifests |
 | **CLI** | `hbench` |
 | **License** | MIT |
 
@@ -107,6 +107,14 @@ hbench finish
 hbench report
 ```
 
+For Pi, keep provider, model, and reasoning separate so the published setup is exact:
+
+```bash
+command -v hbench && hbench version
+hbench run -s zip-password-finder-python-port \
+  --harness pi --provider openai --model gpt-5.6-sol --reasoning medium
+```
+
 `hbench` does not install compilers, language runtimes, harnesses, plugins, skills, or extensions for a ride. Use `hbench doctor -s <scenario>` to see the exact commands and versions that the scenario needs. If a prerequisite is missing or too old, the run stops before setup and tells you what your current `PATH` resolved.
 
 Some rides need uncached inputs. Before hbench downloads a pinned repository, a public scenario manifest, or lockfile-pinned project dependencies, it prints the source, immutable ref or checksum, reason, destination, and expected size, then asks `Proceed? [Y/n]`. Approval is stored for that exact fetch-plan digest only. If a URL, ref, checksum, lockfile, destination, or other plan field changes, hbench asks again. In a non-interactive session, approve the printed plan with `hbench fetch approve <digest>`, then rerun the original command.
@@ -152,7 +160,7 @@ Hosted execution is not part of v0.4. Controlled runs are started manually on a 
 | `hbench fetch show\|approve\|revoke <digest>` | Inspect or change consent for one immutable fetch plan |
 | `hbench version` | Print `hbench <ver> (go)` |
 | `hbench list scenarios` | Official corpus from the home cache |
-| `hbench list runs` | Local runs in `./hb-out` |
+| `hbench list runs` | Local run IDs, statuses, setup labels, and safe next actions |
 | `hbench run -s <id> --harness <name>` | New pending run + workspace |
 | `hbench execute [run_id]` | Headless harness, then finish/judge (spends tokens) |
 | `hbench finish [run_id]` | Capture patch, judge, save. Stay in the start directory. `--force` to re-judge. |

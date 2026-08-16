@@ -23,7 +23,7 @@ import (
 	"github.com/clayton/harness-benchmark/skills"
 )
 
-const version = "0.5.2"
+const version = "0.5.3"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -422,9 +422,29 @@ func cmdList(args []string) error {
 			return nil
 		}
 		for _, e := range entries {
-			if e.IsDir() {
-				fmt.Println(e.Name())
+			if !e.IsDir() {
+				continue
 			}
+			rec, loadErr := loop.Load(l, e.Name())
+			if loadErr != nil {
+				continue
+			}
+			fmt.Printf("%s\t%s\t%s\t%s/%s", rec.ID, rec.Status, rec.ScenarioID, rec.Harness, rec.Model)
+			switch rec.Status {
+			case "pending":
+				if loop.HeadlessCommand(rec.Harness) != "" {
+					fmt.Printf("\tnext: hbench execute %s", rec.ID)
+				} else {
+					fmt.Printf("\tnext: hbench finish %s", rec.ID)
+				}
+			case "preparing", "setup_failed":
+				fmt.Print("\tkept for diagnosis; start a new run after fixing the prerequisite")
+			case "completed", "failed", "timeout", "budget_exceeded":
+				if len(rec.Judges) > 0 {
+					fmt.Printf("\tnext: hbench publish --preview %s", rec.ID)
+				}
+			}
+			fmt.Println()
 		}
 	default:
 		return fmt.Errorf("list %s: use scenarios or runs", what)
@@ -443,7 +463,7 @@ func cmdRun(args []string) error {
   --harness        grok, pi, claude, codex, cursor, or manual
   --provider       model provider, for example openai
   --model          model id (pi: grok-4.6 uses xAI; x-ai/grok-4.6 uses OpenRouter)
-  --reasoning      off, minimal, low, medium, high, xhigh, max, or ultra
+  --reasoning      default, off, minimal, low, medium, high, xhigh, max, or ultra
   --thinking       alias for --reasoning
   --no-setup       skip setup commands
   --trust-scenario approve this exact external scenario digest for this run
@@ -469,6 +489,7 @@ func cmdRun(args []string) error {
 		fs.Usage()
 		return fmt.Errorf("usage: hbench run -s <scenario> --harness <name>")
 	}
+	printCLIIdentity()
 	l := layout()
 	if err := ensureCorpus(l); err != nil {
 		return err
@@ -482,6 +503,20 @@ func cmdRun(args []string) error {
 			return err
 		}
 	}
+	profile, err := loop.NormalizeDirectProfile(loop.Profile{Harness: *harness, Provider: *provider, Model: *model, Reasoning: *reasoning})
+	if err != nil {
+		return err
+	}
+	if profile.Harness != "manual" {
+		identity, err := loop.DetectHarnessIdentity(profile.Harness)
+		if err != nil {
+			return err
+		}
+		profile.HarnessVersion = identity.Version
+		fmt.Printf("Using harness %s at %s (%s)\n", profile.Harness, identity.Path, identity.Version)
+	} else {
+		profile.HarnessVersion = "human"
+	}
 	results, err := loop.CheckRequirements(sc)
 	if err != nil {
 		for _, result := range results {
@@ -492,10 +527,6 @@ func cmdRun(args []string) error {
 		return err
 	}
 	if err := loop.PrepareInputs(l, sc, !*noSetup, func(plan fetchconsent.Plan) error { return authorizeFetch(l, plan) }); err != nil {
-		return err
-	}
-	profile, err := loop.NormalizeDirectProfile(loop.Profile{Harness: *harness, Provider: *provider, Model: *model, Reasoning: *reasoning})
-	if err != nil {
 		return err
 	}
 	rec, err := loop.CreateRunWithProfile(l, sc, profile, !*noSetup)
@@ -520,11 +551,20 @@ func cmdRun(args []string) error {
 	fmt.Printf("  workspace: %s\n", rec.Worktree)
 	fmt.Printf("  prompt:    %s\n", filepath.Join(rec.Worktree, "HB_PROMPT.txt"))
 	if loop.HeadlessCommand(*harness) != "" {
-		fmt.Printf("  next:      stay in this directory; hbench execute %s\n", rec.ID)
+		fmt.Printf("  next:      hbench execute %s\n", rec.ID)
+		fmt.Println("             Run it here or anywhere inside the printed workspace.")
 	} else {
-		fmt.Printf("  next:      stay in this directory; work in the workspace, then hbench finish %s\n", rec.ID)
+		fmt.Printf("  next:      work in the workspace, then hbench finish %s\n", rec.ID)
 	}
 	return nil
+}
+
+func printCLIIdentity() {
+	path, err := os.Executable()
+	if err != nil {
+		path = "unknown"
+	}
+	fmt.Printf("Using hbench %s at %s\n", version, path)
 }
 
 func authorizeExternalScenario(l paths.Layout, sc corpus.Scenario, supplied string) error {
@@ -899,6 +939,9 @@ func cmdPublish(args []string) error {
 	}
 	rodeoURL, _ := publish.ValidatedRodeoURL()
 	fmt.Printf("Published %s to %s\n", id, rodeoURL)
+	if publicURL, ok := out["url"].(string); ok && publicURL != "" {
+		fmt.Printf("  run: %s\n", publicURL)
+	}
 	if v, ok := out["id"]; ok {
 		fmt.Printf("  remote id: %v\n", v)
 	}

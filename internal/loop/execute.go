@@ -21,6 +21,11 @@ type ExecResult struct {
 	TimedOut   bool
 }
 
+type HarnessIdentity struct {
+	Path    string
+	Version string
+}
+
 func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, error) {
 	rec, err := Load(l, id)
 	if err != nil {
@@ -230,17 +235,33 @@ func copyJSONFields(source, dest string, fields ...string) error {
 }
 
 func DetectHarnessVersion(harness string) string {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	raw, err := exec.CommandContext(ctx, harnessProgram(harness), "--version").Output()
+	identity, err := DetectHarnessIdentity(harness)
 	if err != nil {
 		return ""
 	}
+	return identity.Version
+}
+
+func DetectHarnessIdentity(harness string) (HarnessIdentity, error) {
+	program := harnessProgram(harness)
+	path, err := exec.LookPath(program)
+	if err != nil {
+		return HarnessIdentity{}, fmt.Errorf("%s harness executable %q was not found on PATH", harness, program)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	raw, err := exec.CommandContext(ctx, path, "--version").Output()
+	if err != nil {
+		return HarnessIdentity{}, fmt.Errorf("read %s harness version from %s: %w", harness, path, err)
+	}
 	line := strings.TrimSpace(strings.SplitN(string(raw), "\n", 2)[0])
+	if line == "" {
+		return HarnessIdentity{}, fmt.Errorf("%s harness at %s returned an empty version", harness, path)
+	}
 	if len(line) > 200 {
 		line = line[:200]
 	}
-	return line
+	return HarnessIdentity{Path: path, Version: line}, nil
 }
 
 func updateSnapshotExecution(l paths.Layout, rec RunRecord, timeout time.Duration) {

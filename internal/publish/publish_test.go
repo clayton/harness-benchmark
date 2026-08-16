@@ -18,7 +18,8 @@ import (
 
 func TestPublishPostsOnlyWhenCalled(t *testing.T) {
 	var posted bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/riders":
 			if r.Method != http.MethodPost {
@@ -34,7 +35,7 @@ func TestPublishPostsOnlyWhenCalled(t *testing.T) {
 			if !json.Valid(body) {
 				t.Fatal("invalid json")
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "unofficial": false})
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "url": srv.URL + "/runs/1", "unofficial": false})
 		default:
 			http.NotFound(w, r)
 		}
@@ -62,7 +63,7 @@ func TestPublishPostsOnlyWhenCalled(t *testing.T) {
 	if !posted {
 		t.Fatal("publish did not hit /api/v1/runs")
 	}
-	if out["id"] == nil {
+	if out["id"] == nil || out["url"] != srv.URL+"/runs/1" {
 		t.Fatalf("response %+v", out)
 	}
 }

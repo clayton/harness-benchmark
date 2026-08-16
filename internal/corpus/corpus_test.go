@@ -47,6 +47,74 @@ func TestFetchRodeoVerifiesAndCachesSafeManifest(t *testing.T) {
 	}
 }
 
+func TestFetchRodeoHydratesMatchingBuiltInScenario(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureCache(dir); err != nil {
+		t.Fatal(err)
+	}
+	local, err := Find(dir, "zip-password-finder-python-port")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := map[string]any{
+		"schema": "rodeo.scenario.v2", "id": "zip-password-finder-python-port@1", "slug": local.ID, "version": 1,
+		"status": "official", "type": local.Type, "title": local.Title, "description": local.Description, "prompt": local.Prompt,
+		"language": local.Language, "tags": local.Tags, "difficulty": local.Difficulty,
+		"repo":         map[string]any{"url": local.Repo.URL, "base_ref": local.Repo.BaseRef},
+		"acceptance":   map[string]any{"setup_commands": local.Acceptance.SetupCommands, "test_commands": local.Acceptance.TestCommands},
+		"requirements": local.Requirements, "fetches": local.Fetches,
+		"rubric": "Public evaluator", "environment_image_digest": nil, "network_policy": "none", "budget": map[string]any{},
+		"protocol_id": nil, "rating_eligible_until": nil, "builtin_scenario_id": local.ID,
+	}
+	encoded, _ := json.Marshal(manifest)
+	_ = json.Unmarshal(encoded, &manifest)
+	digestible := map[string]any{}
+	for key, value := range manifest {
+		if key != "status" && key != "builtin_scenario_id" {
+			digestible[key] = value
+		}
+	}
+	raw, _ := canonicalJSON(digestible)
+	manifest["manifest_digest"] = fmt.Sprintf("%x", sha256.Sum256(raw))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(manifest) }))
+	defer server.Close()
+	t.Setenv("HB_RODEO_URL", server.URL)
+
+	scenario, err := FetchRodeo(dir, "zip-password-finder-python-port@1", server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scenario.External || scenario.ID != "zip-password-finder-python-port@1" || len(scenario.Acceptance.GoldFiles) == 0 {
+		t.Fatalf("built-in scenario was not hydrated: %+v", scenario)
+	}
+}
+
+func TestFetchRodeoRejectsDriftedBuiltInScenario(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureCache(dir); err != nil {
+		t.Fatal(err)
+	}
+	manifest := map[string]any{
+		"schema": "rodeo.scenario.v2", "id": "zip-password-finder-python-port@1", "slug": "zip-password-finder-python-port", "version": 1,
+		"status": "official", "prompt": "changed", "repo": map[string]any{"url": "https://github.com/agourlay/zip-password-finder.git", "base_ref": strings.Repeat("a", 40)},
+		"acceptance": map[string]any{"setup_commands": []any{}, "test_commands": []any{}}, "builtin_scenario_id": "zip-password-finder-python-port",
+	}
+	digestible := map[string]any{}
+	for key, value := range manifest {
+		if key != "status" && key != "builtin_scenario_id" {
+			digestible[key] = value
+		}
+	}
+	raw, _ := canonicalJSON(digestible)
+	manifest["manifest_digest"] = fmt.Sprintf("%x", sha256.Sum256(raw))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _ = json.NewEncoder(w).Encode(manifest) }))
+	defer server.Close()
+	t.Setenv("HB_RODEO_URL", server.URL)
+	if _, err := FetchRodeo(dir, "zip-password-finder-python-port@1", server.Client()); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("drifted built-in scenario err=%v", err)
+	}
+}
+
 func TestEnsureCacheWritesOfficialYAMLs(t *testing.T) {
 	dir := t.TempDir()
 	if err := EnsureCache(dir); err != nil {

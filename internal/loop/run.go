@@ -217,11 +217,17 @@ func NormalizeDirectProfile(profile Profile) (Profile, error) {
 			return Profile{}, fmt.Errorf("Pi does not support reasoning level ultra")
 		}
 	}
+	if profile.Provider == "" && profile.Harness == "codex" {
+		profile.Provider = "openai"
+	}
 	if profile.Reasoning != "" && !isReasoningLevel(profile.Reasoning) {
 		return Profile{}, fmt.Errorf("unsupported reasoning level %q", profile.Reasoning)
 	}
 	if profile.Workflow == "" {
 		profile.Workflow = "baseline"
+	}
+	if profile.Reasoning == "" && (profile.Harness == "pi" || profile.Harness == "codex") {
+		profile.Reasoning = "default"
 	}
 	if err := ValidateMeasuredProfile(profile); err != nil {
 		return Profile{}, err
@@ -231,7 +237,7 @@ func NormalizeDirectProfile(profile Profile) (Profile, error) {
 
 func isReasoningLevel(value string) bool {
 	switch value {
-	case "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+	case "default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
 		return true
 	default:
 		return false
@@ -288,7 +294,7 @@ func HeadlessLaunchProfile(p Profile, prompt string) LaunchSpec {
 		if mid != "" {
 			args = append(args, "--model", mid)
 		}
-		if p.Reasoning != "" {
+		if p.Reasoning != "" && p.Reasoning != "default" {
 			args = append(args, "--thinking", p.Reasoning)
 		}
 		args = append(args, "--append-system-prompt", "UNATTENDED BENCHMARK MODE: Do not ask the user any questions. The task is fully specified in the user message. Work only in the current working directory. Do not create git worktrees outside this directory. Implement the fix, verify, then stop.", prompt)
@@ -304,7 +310,7 @@ func HeadlessLaunchProfile(p Profile, prompt string) LaunchSpec {
 		if model != "" {
 			args = append(args, "-m", model)
 		}
-		if p.Reasoning != "" {
+		if p.Reasoning != "" && p.Reasoning != "default" {
 			args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", p.Reasoning))
 		}
 		if p.Subagents != "" {
