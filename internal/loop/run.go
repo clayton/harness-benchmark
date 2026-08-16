@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/clayton/harness-benchmark/internal/corpus"
 	"github.com/clayton/harness-benchmark/internal/paths"
@@ -50,10 +51,7 @@ type Profile struct {
 
 func CreateRunWithProfile(l paths.Layout, sc corpus.Scenario, profile Profile, runSetup bool) (RunRecord, error) {
 	id := NewID()
-	wt, err := PrepareWorktree(l, sc, id, runSetup)
-	if err != nil {
-		return RunRecord{}, err
-	}
+	wt := l.Worktree(id)
 	if profile.Model == "" {
 		profile.Model = defaultModel(profile.Harness)
 	}
@@ -72,7 +70,7 @@ func CreateRunWithProfile(l paths.Layout, sc corpus.Scenario, profile Profile, r
 		ID:             id,
 		ScenarioID:     sc.ID,
 		ConfigID:       profile.ID,
-		Status:         "pending",
+		Status:         "preparing",
 		Worktree:       wt,
 		Harness:        profile.Harness,
 		HarnessVersion: profile.HarnessVersion,
@@ -134,6 +132,23 @@ func CreateRunWithProfile(l paths.Layout, sc corpus.Scenario, profile Profile, r
 	if err := SetLatest(l, id); err != nil {
 		return RunRecord{}, err
 	}
+	started := time.Now()
+	prepared, err := PrepareWorktree(l, sc, id, runSetup)
+	setupWall := int(time.Since(started).Milliseconds())
+	rec.Metadata["setup_wall_ms"] = setupWall
+	if err != nil {
+		rec.Status = "setup_failed"
+		rec.Error = err.Error()
+		rec.FinishedAt = Now()
+		rec.Metadata["failed_phase"] = "setup"
+		_ = Save(l, rec)
+		return rec, fmt.Errorf("run %s setup failed: %w", id, err)
+	}
+	rec.Worktree = prepared
+	rec.Status = "pending"
+	if err := Save(l, rec); err != nil {
+		return rec, err
+	}
 	return rec, nil
 }
 
@@ -169,6 +184,59 @@ type LaunchSpec struct {
 }
 
 var modelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+
+func NormalizeDirectProfile(profile Profile) (Profile, error) {
+	if profile.Model == "" {
+		profile.Model = defaultModel(profile.Harness)
+	}
+	if i := strings.LastIndex(profile.Model, ":"); i >= 0 {
+		suffix := profile.Model[i+1:]
+		if isReasoningLevel(suffix) {
+			if profile.Reasoning != "" && profile.Reasoning != suffix {
+				return Profile{}, fmt.Errorf("model reasoning %q conflicts with --reasoning %q", suffix, profile.Reasoning)
+			}
+			profile.Reasoning = suffix
+			profile.Model = profile.Model[:i]
+		}
+	}
+	if profile.Harness == "pi" {
+		derivedProvider, model := splitPiModel(profile.Model)
+		if profile.Provider != "" && derivedProvider != "" && profile.Provider != derivedProvider {
+			return Profile{}, fmt.Errorf("model provider %q conflicts with --provider %q", derivedProvider, profile.Provider)
+		}
+		if profile.Provider == "" {
+			profile.Provider = derivedProvider
+		}
+		if model != "" {
+			profile.Model = model
+		}
+		if profile.Provider == "" {
+			return Profile{}, fmt.Errorf("Pi runs must set --provider or use a provider/model identifier")
+		}
+		if profile.Reasoning == "ultra" {
+			return Profile{}, fmt.Errorf("Pi does not support reasoning level ultra")
+		}
+	}
+	if profile.Reasoning != "" && !isReasoningLevel(profile.Reasoning) {
+		return Profile{}, fmt.Errorf("unsupported reasoning level %q", profile.Reasoning)
+	}
+	if profile.Workflow == "" {
+		profile.Workflow = "baseline"
+	}
+	if err := ValidateMeasuredProfile(profile); err != nil {
+		return Profile{}, err
+	}
+	return profile, nil
+}
+
+func isReasoningLevel(value string) bool {
+	switch value {
+	case "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra":
+		return true
+	default:
+		return false
+	}
+}
 
 func HeadlessCommand(harness string) string {
 	return HeadlessLaunch(harness, "", "").Program

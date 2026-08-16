@@ -151,6 +151,9 @@ func BuildPayload(l paths.Layout, id string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(rec.Judges) == 0 {
+		return nil, fmt.Errorf("run %s has not been judged and cannot be published", id)
+	}
 	judges := make([]map[string]any, 0, len(rec.Judges))
 	for _, judge := range rec.Judges {
 		judges = append(judges, map[string]any{"name": judge.Name, "score": judge.Score, "passed": judge.Passed})

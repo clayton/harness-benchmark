@@ -40,7 +40,7 @@ func TestSuggestHeadlessUsesRunAndExecute(t *testing.T) {
 		t.Fatalf("skills listed = %v", got.Skills)
 	}
 	text := Format(got)
-	if strings.Count(text, "Suggested next step") != 1 {
+	if strings.Count(text, "Optional default smoke ride") != 1 {
 		t.Fatalf("format should have one suggestion block:\n%s", text)
 	}
 	if !strings.Contains(text, "not attached") {

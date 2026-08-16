@@ -24,7 +24,7 @@ Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 
 | | |
 |---|---|
-| **Status** | v0.5.1 — studies, Callouts, and a longer-running House rewrite |
+| **Status** | v0.5.2 — explicit prerequisites and consented benchmark fetches |
 | **CLI** | `hbench` |
 | **License** | MIT |
 
@@ -107,6 +107,10 @@ hbench finish
 hbench report
 ```
 
+`hbench` does not install compilers, language runtimes, harnesses, plugins, skills, or extensions for a ride. Use `hbench doctor -s <scenario>` to see the exact commands and versions that the scenario needs. If a prerequisite is missing or too old, the run stops before setup and tells you what your current `PATH` resolved.
+
+Some rides need uncached inputs. Before hbench downloads a pinned repository, a public scenario manifest, or lockfile-pinned project dependencies, it prints the source, immutable ref or checksum, reason, destination, and expected size, then asks `Proceed? [Y/n]`. Approval is stored for that exact fetch-plan digest only. If a URL, ref, checksum, lockfile, destination, or other plan field changes, hbench asks again. In a non-interactive session, approve the printed plan with `hbench fetch approve <digest>`, then rerun the original command.
+
 ---
 
 ## Features (what works today)
@@ -116,6 +120,7 @@ hbench report
 - **Scenarios** — real OSS bugfixes (pytest, chi, commander.js, FastAPI stream router, …). Agents see **intent only**; `gold_ref` is judge-side.
 - **Community manifests** — `hbench run -s rodeo:<slug>@<version>` downloads a digest-verified public manifest from Agent Rodeo. Private targets and evaluators never enter the manifest.
 - **Explicit external trust** — path, pack, and Community scenarios require approval of a digest covering the full executable manifest and referenced files. Use `hbench inspect` and `hbench trust`; embedded scenarios stay frictionless.
+- **No surprise installation** — scenario prerequisites are checked, never installed. Network fetches are declared, shown, and separately approved before access.
 - **Configs** — baseline and treatment recipes with **pinned harness versions** and models.
 - **Experiments** — YAML matrices (`scenario_ids` × `config_ids` × repeats) under `experiments/`.
 
@@ -143,7 +148,8 @@ Hosted execution is not part of v0.4. Controlled runs are started manually on a 
 | Command | Purpose |
 |---------|---------|
 | `hbench` | Print one suggested command |
-| `hbench doctor` | Probe this machine (harnesses, toolchains, skills) |
+| `hbench doctor [-s <scenario>]` | Probe this machine and optionally check one scenario's prerequisites |
+| `hbench fetch show\|approve\|revoke <digest>` | Inspect or change consent for one immutable fetch plan |
 | `hbench version` | Print `hbench <ver> (go)` |
 | `hbench list scenarios` | Official corpus from the home cache |
 | `hbench list runs` | Local runs in `./hb-out` |
@@ -165,7 +171,7 @@ Hosted execution is not part of v0.4. Controlled runs are started manually on a 
 | `hbench study publish STUDY.yaml` | Publish complete runs and the immutable Study |
 | `hbench callout create STUDY.yaml --statement "..."` | Publish a testable claim with a frozen contract |
 | `hbench callout challenge URL` | Download and verify a Callout contract |
-| `hbench skill install` | Explicitly install the natural-language study skill |
+| `hbench skill install --target <skill-root>` | Explicitly install the natural-language study skill into one chosen root |
 
 Rider credentials are stored per HTTPS origin. Plain HTTP is rejected except for loopback development when `HB_ALLOW_INSECURE_LOCALHOST=1` is explicitly set, and authenticated publish requests never follow redirects.
 

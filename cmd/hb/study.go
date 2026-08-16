@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/clayton/harness-benchmark/internal/corpus"
+	"github.com/clayton/harness-benchmark/internal/fetchconsent"
 	"github.com/clayton/harness-benchmark/internal/loop"
 	"github.com/clayton/harness-benchmark/internal/paths"
 	"github.com/clayton/harness-benchmark/internal/publish"
@@ -153,6 +154,9 @@ func runStudy(m studycontract.Manifest, args []string) error {
 	if err := authorizeStudyScenarios(m); err != nil {
 		return err
 	}
+	if err := prepareStudyInputs(m); err != nil {
+		return err
+	}
 	if err := verifyStudyHarnesses(m); err != nil {
 		return err
 	}
@@ -182,7 +186,7 @@ func runStudy(m studycontract.Manifest, args []string) error {
 		}
 		arm := findArm(m, c.Arm)
 		frozenScenario := findScenario(m, c.Scenario)
-		sc, err := corpus.Resolve(layout().ScenariosDir(), "", c.Scenario)
+		sc, err := resolveScenarioWithConsent(layout(), "", c.Scenario)
 		if err != nil {
 			return err
 		}
@@ -330,7 +334,7 @@ func reconcilePendingStudyCell(m studycontract.Manifest, s *studyState) error {
 
 func verifyStudyScenarios(m studycontract.Manifest) error {
 	for _, frozen := range m.Scenarios {
-		sc, err := corpus.Resolve(layout().ScenariosDir(), "", frozen.ID)
+		sc, err := resolveScenarioWithConsent(layout(), "", frozen.ID)
 		if err != nil {
 			return fmt.Errorf("resolve frozen scenario %s: %w", frozen.ID, err)
 		}
@@ -351,7 +355,7 @@ func verifyStudyScenarios(m studycontract.Manifest) error {
 func authorizeStudyScenarios(m studycontract.Manifest) error {
 	var scenarios []corpus.Scenario
 	for _, frozen := range m.Scenarios {
-		sc, err := corpus.Resolve(layout().ScenariosDir(), "", frozen.ID)
+		sc, err := resolveScenarioWithConsent(layout(), "", frozen.ID)
 		if err != nil {
 			return fmt.Errorf("resolve scenario trust for %s: %w", frozen.ID, err)
 		}
@@ -366,6 +370,23 @@ func authorizeResolvedStudyScenarios(l paths.Layout, scenarios []corpus.Scenario
 			if err := authorizeExternalScenario(l, sc, ""); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func prepareStudyInputs(m studycontract.Manifest) error {
+	l := layout()
+	for _, frozen := range m.Scenarios {
+		sc, err := resolveScenarioWithConsent(l, "", frozen.ID)
+		if err != nil {
+			return err
+		}
+		if _, err := loop.CheckRequirements(sc); err != nil {
+			return err
+		}
+		if err := loop.PrepareInputs(l, sc, true, func(plan fetchconsent.Plan) error { return authorizeFetch(l, plan) }); err != nil {
+			return err
 		}
 	}
 	return nil

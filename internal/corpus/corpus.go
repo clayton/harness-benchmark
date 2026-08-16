@@ -39,6 +39,22 @@ type Acceptance struct {
 	GoldFiles     []string `yaml:"gold_files" json:"gold_files,omitempty"`
 }
 
+type CommandRequirement struct {
+	Name           string `yaml:"name" json:"name"`
+	MinimumVersion string `yaml:"minimum_version,omitempty" json:"minimum_version,omitempty"`
+	Purpose        string `yaml:"purpose" json:"purpose"`
+}
+
+type Requirements struct {
+	Commands []CommandRequirement `yaml:"commands,omitempty" json:"commands,omitempty"`
+}
+
+type Fetch struct {
+	Kind     string `yaml:"kind" json:"kind"`
+	Lockfile string `yaml:"lockfile,omitempty" json:"lockfile,omitempty"`
+	Reason   string `yaml:"reason" json:"reason"`
+}
+
 type Workspace struct {
 	Kind  string            `yaml:"kind,omitempty" json:"kind,omitempty"`
 	Files map[string]string `yaml:"files,omitempty" json:"files,omitempty"`
@@ -69,25 +85,27 @@ func ScaffoldPaths(files map[string]string) ([]string, error) {
 }
 
 type Scenario struct {
-	ID                     string     `yaml:"id" json:"id"`
-	Type                   string     `yaml:"type" json:"type"`
-	Title                  string     `yaml:"title" json:"title"`
-	Description            string     `yaml:"description" json:"description"`
-	Prompt                 string     `yaml:"prompt" json:"prompt"`
-	Language               string     `yaml:"language" json:"language"`
-	Tags                   []string   `yaml:"tags" json:"tags"`
-	Difficulty             string     `yaml:"difficulty" json:"difficulty"`
-	Repo                   Repo       `yaml:"repo" json:"repo"`
-	Workspace              Workspace  `yaml:"workspace,omitempty" json:"workspace,omitempty"`
-	Acceptance             Acceptance `yaml:"acceptance" json:"acceptance"`
-	SourceDir              string     `yaml:"-" json:"source_dir,omitempty"`
-	Status                 string     `yaml:"status,omitempty" json:"status,omitempty"`
-	Version                int        `yaml:"version,omitempty" json:"version,omitempty"`
-	ManifestDigest         string     `yaml:"manifest_digest,omitempty" json:"manifest_digest,omitempty"`
-	ProtocolID             string     `yaml:"protocol_id,omitempty" json:"protocol_id,omitempty"`
-	NetworkPolicy          string     `yaml:"network_policy,omitempty" json:"network_policy,omitempty"`
-	EnvironmentImageDigest string     `yaml:"environment_image_digest,omitempty" json:"environment_image_digest,omitempty"`
-	External               bool       `yaml:"-" json:"-"`
+	ID                     string       `yaml:"id" json:"id"`
+	Type                   string       `yaml:"type" json:"type"`
+	Title                  string       `yaml:"title" json:"title"`
+	Description            string       `yaml:"description" json:"description"`
+	Prompt                 string       `yaml:"prompt" json:"prompt"`
+	Language               string       `yaml:"language" json:"language"`
+	Tags                   []string     `yaml:"tags" json:"tags"`
+	Difficulty             string       `yaml:"difficulty" json:"difficulty"`
+	Repo                   Repo         `yaml:"repo" json:"repo"`
+	Workspace              Workspace    `yaml:"workspace,omitempty" json:"workspace,omitempty"`
+	Acceptance             Acceptance   `yaml:"acceptance" json:"acceptance"`
+	Requirements           Requirements `yaml:"requirements,omitempty" json:"requirements,omitempty"`
+	Fetches                []Fetch      `yaml:"fetches,omitempty" json:"fetches,omitempty"`
+	SourceDir              string       `yaml:"-" json:"source_dir,omitempty"`
+	Status                 string       `yaml:"status,omitempty" json:"status,omitempty"`
+	Version                int          `yaml:"version,omitempty" json:"version,omitempty"`
+	ManifestDigest         string       `yaml:"manifest_digest,omitempty" json:"manifest_digest,omitempty"`
+	ProtocolID             string       `yaml:"protocol_id,omitempty" json:"protocol_id,omitempty"`
+	NetworkPolicy          string       `yaml:"network_policy,omitempty" json:"network_policy,omitempty"`
+	EnvironmentImageDigest string       `yaml:"environment_image_digest,omitempty" json:"environment_image_digest,omitempty"`
+	External               bool         `yaml:"-" json:"-"`
 }
 
 func (s Scenario) ToDoctor() doctor.Scenario {
@@ -203,20 +221,36 @@ func Resolve(officialDir, from, idOrPath string) (Scenario, error) {
 
 var rodeoID = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*@[1-9][0-9]*$`)
 
-func FetchRodeo(cacheDir, identifier string, client *http.Client) (Scenario, error) {
+func RodeoManifestLocation(cacheDir, identifier string) (source, destination string, cached bool, err error) {
 	if !rodeoID.MatchString(identifier) {
-		return Scenario{}, fmt.Errorf("invalid rodeo scenario %q; expected slug@version", identifier)
+		return "", "", false, fmt.Errorf("invalid rodeo scenario %q; expected slug@version", identifier)
 	}
 	parts := strings.SplitN(identifier, "@", 2)
-	cachePath := filepath.Join(cacheDir, "community", strings.ReplaceAll(identifier, "@", "-v")+".json")
+	destination = filepath.Join(cacheDir, "community", strings.ReplaceAll(identifier, "@", "-v")+".json")
 	baseURL := strings.TrimRight(os.Getenv("HB_RODEO_URL"), "/")
 	if baseURL == "" {
 		baseURL = "https://agentrodeo.dev"
 	}
+	source = fmt.Sprintf("%s/api/v1/scenarios/%s/versions/%s/manifest", baseURL, parts[0], parts[1])
+	if raw, readErr := os.ReadFile(destination); readErr == nil {
+		_, decodeErr := decodeRodeoManifest(raw, identifier)
+		cached = decodeErr == nil
+	}
+	return source, destination, cached, nil
+}
+
+func FetchRodeo(cacheDir, identifier string, client *http.Client) (Scenario, error) {
+	url, cachePath, cached, err := RodeoManifestLocation(cacheDir, identifier)
+	if err != nil {
+		return Scenario{}, err
+	}
+	if cached {
+		raw, _ := os.ReadFile(cachePath)
+		return decodeRodeoManifest(raw, identifier)
+	}
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
-	url := fmt.Sprintf("%s/api/v1/scenarios/%s/versions/%s/manifest", baseURL, parts[0], parts[1])
 	request, _ := http.NewRequest(http.MethodGet, url, nil)
 	request.Header.Set("Accept", "application/json")
 	response, err := client.Do(request)

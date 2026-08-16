@@ -74,7 +74,7 @@ func TestDoctorPrintsFullReport(t *testing.T) {
 	if !strings.Contains(out, "not attached") {
 		t.Fatalf("must say skills are not attached:\n%s", out)
 	}
-	if strings.Count(out, "Suggested next step") != 1 {
+	if strings.Count(out, "Optional default smoke ride") != 1 {
 		t.Fatalf("want one suggestion:\n%s", out)
 	}
 }

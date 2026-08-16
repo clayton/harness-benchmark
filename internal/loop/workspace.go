@@ -91,17 +91,12 @@ func PrepareWorktree(l paths.Layout, sc corpus.Scenario, runID string, runSetup 
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return "", err
 	}
-	// Clone from the scenario remote, not the cache. A worktree whose origin is
-	// a blobless cache cannot fetch historical blobs (chi.go / wrap_writer.go).
-	if err := runGit("", "clone", sc.Repo.URL, dest); err != nil {
+	// Network access is consented when the full local cache is prepared. Clone
+	// from that cache so creating a workspace cannot perform a second fetch.
+	if err := runGit("", "clone", "--no-hardlinks", cache, dest); err != nil {
 		return "", fmt.Errorf("worktree clone: %w", err)
 	}
-	if err := fetchRef(dest, sc.Repo.BaseRef); err != nil {
-		_ = git(dest, "remote", "remove", "hb-cache")
-		if err := git(dest, "remote", "add", "hb-cache", cache); err == nil {
-			_ = git(dest, "fetch", "hb-cache", sc.Repo.BaseRef)
-		}
-	}
+	_ = git(dest, "remote", "set-url", "origin", sc.Repo.URL)
 	if err := git(dest, "checkout", "-f", "--detach", sc.Repo.BaseRef); err != nil {
 		return "", fmt.Errorf("checkout %s: %w", sc.Repo.BaseRef, err)
 	}
@@ -120,7 +115,7 @@ func PrepareWorktree(l paths.Layout, sc corpus.Scenario, runID string, runSetup 
 		for _, cmd := range sc.Acceptance.SetupCommands {
 			c := exec.Command("sh", "-c", cmd)
 			c.Dir = dest
-			c.Env = minimalCommandEnv()
+			c.Env = preparationEnv(l, sc)
 			if out, err := c.CombinedOutput(); err != nil {
 				return "", fmt.Errorf("setup %q: %w\n%s", cmd, err, out)
 			}
@@ -171,7 +166,7 @@ func prepareScaffold(l paths.Layout, sc corpus.Scenario, runID string, runSetup 
 		for _, line := range sc.Acceptance.SetupCommands {
 			c := exec.Command("sh", "-c", line)
 			c.Dir = dest
-			c.Env = minimalCommandEnv()
+			c.Env = preparationEnv(l, sc)
 			if out, err := c.CombinedOutput(); err != nil {
 				return "", fmt.Errorf("setup %q: %w\n%s", line, err, out)
 			}

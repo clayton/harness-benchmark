@@ -48,7 +48,7 @@ func TestPublishPostsOnlyWhenCalled(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
 	l := paths.New(home, cwd)
-	rec := loop.RunRecord{ID: "deadbeefcafe", ScenarioID: "js-commander-negative-exp-E", Status: "completed", Worktree: l.Worktree("deadbeefcafe"), Harness: "grok", CreatedAt: loop.Now()}
+	rec := loop.RunRecord{ID: "deadbeefcafe", ScenarioID: "js-commander-negative-exp-E", Status: "completed", Worktree: l.Worktree("deadbeefcafe"), Harness: "grok", Judges: []loop.JudgeScore{{Name: "test"}}, CreatedAt: loop.Now()}
 	if err := loop.Save(l, rec); err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestBuildPayloadExcludesPrivateRunAndSnapshotFields(t *testing.T) {
 	}
 	rec := loop.RunRecord{ID: id, ScenarioID: "task", ConfigID: "config", Status: "completed", Worktree: worktree,
 		Harness: "codex", Model: "gpt-5", Error: "SECRET_ERROR", Notes: "SECRET_NOTES", CreatedAt: loop.Now(),
-		Metadata: map[string]any{"workflow": "baseline", "private": "SECRET_METADATA"}}
+		Judges: []loop.JudgeScore{{Name: "test"}}, Metadata: map[string]any{"workflow": "baseline", "private": "SECRET_METADATA"}}
 	if err := loop.Save(l, rec); err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestBuildPayloadPublishesFrozenStudyBinding(t *testing.T) {
 	if err := os.MkdirAll(worktree, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := loop.Save(l, loop.RunRecord{ID: id, ScenarioID: "task", Status: "completed", Worktree: worktree, Harness: "codex", Model: "sol", CreatedAt: loop.Now()}); err != nil {
+	if err := loop.Save(l, loop.RunRecord{ID: id, ScenarioID: "task", Status: "completed", Worktree: worktree, Harness: "codex", Model: "sol", Judges: []loop.JudgeScore{{Name: "test"}}, CreatedAt: loop.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	snapshot := `{"study":{"id":"fight","contract_digest":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","arm_id":"a","scenario_id":"rodeo:task@1","repeat":2,"scenario_digest":"ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"},"config":{"id":"a","harness":"codex","harness_version":"codex-cli 1","model":"sol","workflow":"baseline","skills":[],"interaction":"unattended","judge_protocol":"scenario-default","budget":{"max_minutes_per_run":45}}}`

@@ -14,6 +14,7 @@ import (
 	"github.com/clayton/harness-benchmark/internal/controlled"
 	"github.com/clayton/harness-benchmark/internal/corpus"
 	"github.com/clayton/harness-benchmark/internal/doctor"
+	"github.com/clayton/harness-benchmark/internal/fetchconsent"
 	"github.com/clayton/harness-benchmark/internal/loop"
 	"github.com/clayton/harness-benchmark/internal/paths"
 	"github.com/clayton/harness-benchmark/internal/publish"
@@ -22,7 +23,7 @@ import (
 	"github.com/clayton/harness-benchmark/skills"
 )
 
-const version = "0.5.1"
+const version = "0.5.2"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -40,7 +41,9 @@ func run(args []string) error {
 		fmt.Printf("hbench %s (go)\n", version)
 		return nil
 	case "doctor":
-		return cmdDoctor()
+		return cmdDoctor(args[1:])
+	case "fetch":
+		return cmdFetch(args[1:])
 	case "help", "-h", "--help":
 		printHelp()
 		return nil
@@ -114,7 +117,7 @@ func cmdControlledAction(action string, args []string) error {
 		return fmt.Errorf("--scenario, --pack, and --key-id are required")
 	}
 	l := layout()
-	scenario, err := corpus.Resolve(l.ScenariosDir(), "", *scenarioID)
+	scenario, err := resolveScenarioWithConsent(l, "", *scenarioID)
 	if err != nil {
 		return err
 	}
@@ -184,7 +187,8 @@ func usage() string {
 
 Commands:
   hbench                      print one suggested command
-  hbench doctor               what this machine has
+  hbench doctor [-s <scenario>] what this machine has
+  hbench fetch show|approve|revoke <plan_digest>
   hbench version
   hbench list scenarios
   hbench list runs
@@ -202,6 +206,55 @@ Commands:
   hbench callout challenge <url>
   hbench skill install [--target DIR]
 `
+}
+
+func cmdFetch(args []string) error {
+	if len(args) != 2 || (args[0] != "show" && args[0] != "approve" && args[0] != "revoke") {
+		return fmt.Errorf("usage: hbench fetch show|approve|revoke <plan_digest>")
+	}
+	l := layout()
+	digest := args[1]
+	switch args[0] {
+	case "show":
+		plan, err := fetchconsent.LoadPlan(l.DataDir, digest)
+		if err != nil {
+			return err
+		}
+		fmt.Print(fetchconsent.Format(plan))
+	case "approve":
+		if err := fetchconsent.Approve(l.DataDir, digest); err != nil {
+			return err
+		}
+		fmt.Printf("Approved fetch plan %s. Approval applies only to this immutable plan.\n", digest)
+	case "revoke":
+		if err := fetchconsent.Revoke(l.DataDir, digest); err != nil {
+			return err
+		}
+		fmt.Printf("Revoked fetch plan %s.\n", digest)
+	}
+	return nil
+}
+
+func authorizeFetch(l paths.Layout, plan fetchconsent.Plan) error {
+	digest := plan.Digest()
+	if fetchconsent.Approved(l.DataDir, digest) {
+		return nil
+	}
+	if err := fetchconsent.SavePlan(l.DataDir, plan); err != nil {
+		return err
+	}
+	fmt.Print(fetchconsent.Format(plan))
+	info, _ := os.Stdin.Stat()
+	if info == nil || info.Mode()&os.ModeCharDevice == 0 {
+		return fmt.Errorf("network fetch requires approval; run: hbench fetch approve %s\nthen rerun the original command", digest)
+	}
+	fmt.Print("Proceed? [Y/n] ")
+	answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	if answer != "" && answer != "y" && answer != "yes" {
+		return fmt.Errorf("fetch declined; hbench did not access the network")
+	}
+	return fetchconsent.Approve(l.DataDir, digest)
 }
 
 func cmdSkill(args []string) error {
@@ -289,7 +342,7 @@ func cmdSuggest() error {
 		case "pending", "running":
 			fmt.Printf("hbench finish %s\n", rec.ID)
 			return nil
-		case "completed", "failed":
+		case "completed", "failed", "timeout", "budget_exceeded", "setup_failed", "preparing":
 			fmt.Println("hbench report")
 			return nil
 		}
@@ -306,12 +359,42 @@ func cmdSuggest() error {
 	return nil
 }
 
-func cmdDoctor() error {
+func cmdDoctor(args []string) error {
+	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	scenarioID := fs.String("s", "", "scenario id")
+	fs.StringVar(scenarioID, "scenario", "", "scenario id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	sug, err := probeSuggestion()
 	if err != nil {
 		return err
 	}
 	fmt.Print(doctor.Format(sug))
+	if *scenarioID != "" {
+		l := layout()
+		sc, err := resolveScenarioWithConsent(l, "", *scenarioID)
+		if err != nil {
+			return err
+		}
+		results, checkErr := loop.CheckRequirements(sc)
+		fmt.Printf("\nPrerequisites for %s:\n", sc.ID)
+		if len(results) == 0 {
+			fmt.Println("  (none declared)")
+		}
+		for _, result := range results {
+			state := "ready"
+			if result.Problem != "" {
+				state = result.Problem
+			}
+			version := result.Version
+			if version == "" {
+				version = "version not required"
+			}
+			fmt.Printf("  %s: %s (%s, %s)\n", result.Name, state, result.Path, version)
+		}
+		return checkErr
+	}
 	return nil
 }
 
@@ -358,15 +441,21 @@ func cmdRun(args []string) error {
   -s, --scenario   official scenario id, or a path to a .yaml
   --from           extra directory of scenario YAML (optional packs)
   --harness        grok, pi, claude, codex, cursor, or manual
+  --provider       model provider, for example openai
   --model          model id (pi: grok-4.6 uses xAI; x-ai/grok-4.6 uses OpenRouter)
+  --reasoning      off, minimal, low, medium, high, xhigh, max, or ultra
+  --thinking       alias for --reasoning
   --no-setup       skip setup commands
-	  --trust-scenario approve this exact external scenario digest for this run
+  --trust-scenario approve this exact external scenario digest for this run
 `)
 	}
 	scenario := fs.String("s", "", "scenario id")
 	from := fs.String("from", "", "extra scenario directory")
 	harness := fs.String("harness", "", "harness name")
+	provider := fs.String("provider", "", "model provider")
 	model := fs.String("model", "", "model id")
+	reasoning := fs.String("reasoning", "", "reasoning level")
+	fs.StringVar(reasoning, "thinking", "", "alias for --reasoning")
 	noSetup := fs.Bool("no-setup", false, "skip setup commands")
 	trustScenario := fs.String("trust-scenario", "", "approved external scenario sha256 digest")
 	fs.StringVar(scenario, "scenario", "", "scenario id")
@@ -384,7 +473,7 @@ func cmdRun(args []string) error {
 	if err := ensureCorpus(l); err != nil {
 		return err
 	}
-	sc, err := corpus.Resolve(l.ScenariosDir(), *from, *scenario)
+	sc, err := resolveScenarioWithConsent(l, *from, *scenario)
 	if err != nil {
 		return err
 	}
@@ -393,14 +482,40 @@ func cmdRun(args []string) error {
 			return err
 		}
 	}
-	rec, err := loop.CreateRunWithModel(l, sc, *harness, *model, !*noSetup)
+	results, err := loop.CheckRequirements(sc)
 	if err != nil {
+		for _, result := range results {
+			if result.Problem != "" {
+				fmt.Printf("  %s: %s (resolved %s)\n", result.Name, result.Problem, result.Path)
+			}
+		}
+		return err
+	}
+	if err := loop.PrepareInputs(l, sc, !*noSetup, func(plan fetchconsent.Plan) error { return authorizeFetch(l, plan) }); err != nil {
+		return err
+	}
+	profile, err := loop.NormalizeDirectProfile(loop.Profile{Harness: *harness, Provider: *provider, Model: *model, Reasoning: *reasoning})
+	if err != nil {
+		return err
+	}
+	rec, err := loop.CreateRunWithProfile(l, sc, profile, !*noSetup)
+	if err != nil {
+		if rec.ID != "" {
+			fmt.Printf("Run %s status=%s\n", rec.ID, rec.Status)
+			fmt.Printf("  report: hbench report\n")
+		}
 		return err
 	}
 	fmt.Printf("Run created %s\n", rec.ID)
 	fmt.Printf("  status:    %s\n", rec.Status)
 	if rec.Model != "" {
 		fmt.Printf("  model:     %s\n", rec.Model)
+	}
+	if profile.Provider != "" {
+		fmt.Printf("  provider:  %s\n", profile.Provider)
+	}
+	if profile.Reasoning != "" {
+		fmt.Printf("  reasoning: %s\n", profile.Reasoning)
 	}
 	fmt.Printf("  workspace: %s\n", rec.Worktree)
 	fmt.Printf("  prompt:    %s\n", filepath.Join(rec.Worktree, "HB_PROMPT.txt"))
@@ -460,14 +575,55 @@ func resolveScenarioFlag(args []string, command string) (paths.Layout, corpus.Sc
 	if err := ensureCorpus(l); err != nil {
 		return l, corpus.Scenario{}, err
 	}
-	sc, err := corpus.Resolve(l.ScenariosDir(), *from, *scenario)
+	sc, err := resolveScenarioWithConsent(l, *from, *scenario)
 	return l, sc, err
+}
+
+func resolveScenarioWithConsent(l paths.Layout, from, identifier string) (corpus.Scenario, error) {
+	if strings.HasPrefix(identifier, "rodeo:") {
+		remoteID := strings.TrimPrefix(identifier, "rodeo:")
+		source, destination, cached, err := corpus.RodeoManifestLocation(l.ScenariosDir(), remoteID)
+		if err != nil {
+			return corpus.Scenario{}, err
+		}
+		if !cached {
+			plan := fetchconsent.New(fetchconsent.Item{
+				Kind: "Agent Rodeo manifest", Source: source, Ref: remoteID,
+				Reason: "public benchmark contract", Destination: destination, Size: "at most 1 MiB",
+			})
+			if err := authorizeFetch(l, plan); err != nil {
+				return corpus.Scenario{}, err
+			}
+		}
+	}
+	return corpus.Resolve(l.ScenariosDir(), from, identifier)
 }
 
 func printScenarioInspection(sc corpus.Scenario, digest string) {
 	fmt.Printf("  trust digest: %s\n", digest)
 	fmt.Printf("  repository:   %s\n  base ref:     %s\n  gold ref:     %s\n", sc.Repo.URL, sc.Repo.BaseRef, sc.Repo.GoldRef)
 	fmt.Printf("  image:        %s\n  network:      %s\n", sc.EnvironmentImageDigest, sc.NetworkPolicy)
+	fmt.Println("  prerequisites:")
+	if len(sc.Requirements.Commands) == 0 {
+		fmt.Println("    (none declared)")
+	}
+	for _, requirement := range sc.Requirements.Commands {
+		version := ""
+		if requirement.MinimumVersion != "" {
+			version = " >= " + requirement.MinimumVersion
+		}
+		fmt.Printf("    %s%s — %s\n", requirement.Name, version, requirement.Purpose)
+	}
+	fmt.Println("  consented fetches:")
+	if sc.Repo.URL != "" {
+		fmt.Printf("    git %s @ %s\n", sc.Repo.URL, sc.Repo.BaseRef)
+	}
+	if len(sc.Fetches) == 0 && sc.Repo.URL == "" {
+		fmt.Println("    (none declared)")
+	}
+	for _, fetch := range sc.Fetches {
+		fmt.Printf("    %s %s — %s\n", fetch.Kind, fetch.Lockfile, fetch.Reason)
+	}
 	for _, item := range []struct {
 		name     string
 		commands []string

@@ -6,6 +6,8 @@ Required fields are `schema`, `id`, `question`, `comparison_mode`, `scenarios`, 
 
 Each scenario has an immutable `id` and required 64-character digest. Each arm names its harness, exact `harness_version`, model, and any provider, reasoning level, workflow, skills, extensions, plugins, tools, subagent topology, environment, and network policy. The harness version must match the installed harness `--version` output.
 
+Scenario manifests can declare command prerequisites under `requirements.commands` and approved input classes under `fetches`. A ride never installs prerequisites. `hbench doctor -s <scenario>` reports missing commands and minimum-version failures. Pinned source repositories and lockfile-pinned project dependencies can be fetched only after consent to an immutable fetch-plan digest.
+
 Post-run stop thresholds may include `max_usd_per_run`, `max_usd_total`, and `max_tokens_per_run`. The time value is a live timeout. Dollar and token thresholds are checked after each run, so the total can overshoot by one run. A manifest digest freezes the published contract.
 
 Codex subagent topology uses `COUNTx:MODEL:EFFORT`, for example `5x:gpt-5.6-luna:ultra`. Counts are 1 through 16. This format lets hbench lock the child model, reasoning effort, and thread cap instead of relying on prompt labels.

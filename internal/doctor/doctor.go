@@ -264,7 +264,7 @@ func Format(s Suggestion) string {
 	for _, n := range s.Skills {
 		fmt.Fprintf(&b, "  %s\n", n)
 	}
-	b.WriteString("\nSuggested next step (paste to run; nothing has been executed):\n")
+	b.WriteString("\nOptional default smoke ride (generic; nothing has been executed):\n")
 	if s.Command == "" {
 		b.WriteString("  (none: install a judge toolchain or a headless harness)\n")
 	} else {

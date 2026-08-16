@@ -102,6 +102,35 @@ func TestCreateRunAndFinishWithoutExecute(t *testing.T) {
 	}
 }
 
+func TestCreateRunRecordsSetupFailure(t *testing.T) {
+	root := t.TempDir()
+	l := paths.New(root, root)
+	l.DataDir = filepath.Join(root, "data")
+	l.OutDir = filepath.Join(root, "out")
+	sc := corpus.Scenario{
+		ID: "broken-setup", Title: "broken setup", Prompt: "do work",
+		Workspace:  corpus.Workspace{Kind: "scaffold", Files: map[string]string{"README.md": "hello\n"}},
+		Acceptance: corpus.Acceptance{SetupCommands: []string{"exit 42"}},
+	}
+	rec, err := CreateRunWithProfile(l, sc, Profile{Harness: "manual"}, true)
+	if err == nil {
+		t.Fatal("setup failure was accepted")
+	}
+	if rec.ID == "" || rec.Status != "setup_failed" || rec.FinishedAt == "" {
+		t.Fatalf("record=%+v", rec)
+	}
+	if rec.Telemetry.TotalTokens != nil || len(rec.Judges) != 0 {
+		t.Fatalf("failed setup has result data: %+v", rec)
+	}
+	loaded, loadErr := Load(l, rec.ID)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if loaded.Status != "setup_failed" || loaded.Metadata["failed_phase"] != "setup" {
+		t.Fatalf("loaded=%+v", loaded)
+	}
+}
+
 func TestSnapshotRoundTripKeepsPackFields(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()
