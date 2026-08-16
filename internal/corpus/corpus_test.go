@@ -72,6 +72,9 @@ func TestEnsureCacheWritesOfficialYAMLs(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "js-commander-negative-exp-E.yaml")); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := os.Stat(filepath.Join(dir, "hb_zip_password_finder_test.py")); err != nil {
+		t.Fatalf("embedded evaluator asset missing: %v", err)
+	}
 }
 
 func TestFindReturnsCachedScenario(t *testing.T) {

@@ -4,7 +4,7 @@
 # Read this file before piping it to sh.
 set -eu
 
-TAG="v0.5.0"
+TAG="v0.5.1"
 REPO="https://github.com/clayton/harness-benchmark"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -20,10 +20,10 @@ OTHER_HB=""
 # Pinned in this script. GitHub hosts the binary; we do not fetch SUMS from it.
 expected_sha() {
   case $1 in
-    hbench-darwin-amd64) echo "0dea11a5725ad822ce24731207e50f9bd53d3cccc997ae4ac4d67de811c459a1" ;;
-    hbench-darwin-arm64) echo "594e9bf3ce037a94d021b272258166d29ed5b469d21d8b0ca1594b190abefff2" ;;
-    hbench-linux-amd64) echo "02cff86287da20aaf2e2a826bbd371df5653fb53f9c2c01a8fdaa45a55b465c3" ;;
-    hbench-linux-arm64) echo "69900b949cb2b94415ae0a1e138e0b545c764d6785b746c65542615370319e4c" ;;
+    hbench-darwin-amd64) echo "6427a92b5fd52f276af405fe6853a8e4c6cf4dad43ecaaff23889f012624cf7d" ;;
+    hbench-darwin-arm64) echo "dcb0d269846ebb8c9445d3a784f15beb66580870baae41f85ce3fca45dfbbbba" ;;
+    hbench-linux-amd64) echo "b2dbf07534c41c8d1946eb018432b5f819833b2154c6942fe41d3e7f7474e6ad" ;;
+    hbench-linux-arm64) echo "0db41900f7117d3c81b3b4fa1c699e1a67ef7bc78253f34cc722023ee6365cd9" ;;
     *) return 1 ;;
   esac
 }

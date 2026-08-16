@@ -21,7 +21,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-//go:embed scenarios/*.yaml
+//go:embed scenarios/*
 var embedded embed.FS
 
 type Repo struct {
@@ -108,7 +108,7 @@ func EnsureCache(destDir string) error {
 		return err
 	}
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
+		if e.IsDir() {
 			continue
 		}
 		if e.Name() == "example-synthetic-bugfix.yaml" {

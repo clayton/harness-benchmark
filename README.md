@@ -24,7 +24,7 @@ Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 
 | | |
 |---|---|
-| **Status** | v0.5.0 — studies, Callouts, and operator-controlled runs |
+| **Status** | v0.5.1 — studies, Callouts, and a longer-running House rewrite |
 | **CLI** | `hbench` |
 | **License** | MIT |
 
