@@ -120,6 +120,9 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	wall := int(time.Since(start).Milliseconds())
 	closeErr := logF.Close()
 	rec.Telemetry = ExtractTelemetry(rec.Harness, logPath)
+	if rec.Harness == "pi" {
+		freezePiPriceSnapshot(&rec.Telemetry, filepath.Join(l.RunDir(id), "harness-home", "pi", "models-store.json"), profile.Provider, profile.Model)
+	}
 	if !profileChildUsageComplete(profile, rec.Telemetry) {
 		complete := false
 		rec.Telemetry.Complete = &complete
@@ -182,6 +185,9 @@ func isolatedHarnessEnv(l paths.Layout, rec RunRecord) ([]string, error) {
 		if err := copyAuthFile(filepath.Join(home, ".pi", "agent", "models.json"), filepath.Join(piHome, "models.json")); err != nil {
 			return nil, err
 		}
+		if err := copyAuthFile(filepath.Join(home, ".pi", "agent", "models-store.json"), filepath.Join(piHome, "models-store.json")); err != nil {
+			return nil, err
+		}
 		piEnv := append(base, "PI_CODING_AGENT_DIR="+piHome, "PI_CODING_AGENT_SESSION_DIR="+filepath.Join(piHome, "sessions"))
 		if envName := providerAPIKeyEnv(profileProvider(rec)); envName != "" {
 			if key := os.Getenv(envName); key != "" {
@@ -201,6 +207,34 @@ func isolatedHarnessEnv(l paths.Layout, rec RunRecord) ([]string, error) {
 		return base, nil
 	default:
 		return base, nil
+	}
+}
+
+func freezePiPriceSnapshot(telemetry *Telemetry, path, provider, model string) {
+	raw, err := os.ReadFile(path)
+	if err != nil || telemetry.TokensIn == nil || telemetry.TokensOut == nil || telemetry.EstimatedUSD == nil {
+		return
+	}
+	var store map[string]struct {
+		Models    []json.RawMessage `json:"models"`
+		CheckedAt int64             `json:"checkedAt"`
+	}
+	if json.Unmarshal(raw, &store) != nil {
+		return
+	}
+	for _, rawModel := range store[provider].Models {
+		var entry struct {
+			ID   string         `json:"id"`
+			Cost map[string]any `json:"cost"`
+		}
+		if json.Unmarshal(rawModel, &entry) != nil || entry.ID != model || len(entry.Cost) == 0 {
+			continue
+		}
+		snapshot, _ := json.Marshal(map[string]any{"provider": provider, "model": model, "checked_at": store[provider].CheckedAt, "cost_per_million_tokens": entry.Cost})
+		telemetry.PriceSnapshot = string(snapshot)
+		complete := true
+		telemetry.Complete = &complete
+		return
 	}
 }
 

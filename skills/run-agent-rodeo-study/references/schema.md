@@ -4,7 +4,7 @@ Required fields are `schema`, `id`, `question`, `comparison_mode`, `scenarios`, 
 
 `win_rule` is currently the fixed identifier `callout-title-v1`. It ranks reliability first, then quality, then complete cost and token efficiency.
 
-Each scenario has an immutable `id` and required 64-character digest. Each arm names its harness, exact `harness_version`, model, and any provider, reasoning level, workflow, skills, extensions, plugins, tools, subagent topology, environment, and network policy. The harness version must match the installed harness `--version` output.
+Each scenario must use the publishable Agent Rodeo form `rodeo:slug@version` and the 64-character `manifest_digest` returned by that version's public manifest. Embedded local IDs and trust digests are valid for direct rides, not Studies or Callouts. Each arm names its harness, exact `harness_version`, model, and any provider, reasoning level, workflow, skills, extensions, plugins, tools, subagent topology, environment, and network policy. The harness version must match the installed harness `--version` output.
 
 Scenario manifests can declare command prerequisites under `requirements.commands` and approved input classes under `fetches`. A ride never installs prerequisites. `hbench doctor -s <scenario>` reports missing commands and minimum-version failures. Pinned source repositories and lockfile-pinned project dependencies can be fetched only after consent to an immutable fetch-plan digest.
 

@@ -48,7 +48,7 @@ func cmdStudy(args []string) error {
 	}
 	switch action {
 	case "validate":
-		fmt.Printf("Valid %s study %s\ncontract: %s\n", m.ComparisonMode, m.ID, m.Digest())
+		fmt.Printf("Valid publishable %s study %s\ncontract: %s\n", m.ComparisonMode, m.ID, m.Digest())
 		return nil
 	case "plan":
 		return printStudyPlan(m)
@@ -64,7 +64,7 @@ func cmdStudy(args []string) error {
 }
 
 func printStudyPlan(m studycontract.Manifest) error {
-	fmt.Printf("%s\nmode: %s\ncontract: %s\n", m.Question, m.ComparisonMode, m.Digest())
+	fmt.Printf("%s\nmode: %s\npublishable: yes\ncontract: %s\n", m.Question, m.ComparisonMode, m.Digest())
 	fmt.Printf("matrix: %d arms × %d scenarios × %d repeats = %d runs\n", len(m.Arms), len(m.Scenarios), m.Repeats, m.RunCount())
 	fmt.Printf("changed axes: %s\n", strings.Join(m.DifferingAxes(), ", "))
 	for _, a := range m.Arms {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -66,6 +67,7 @@ type Arm struct {
 }
 
 var axes = []string{"harness", "harness_version", "provider", "model", "reasoning", "workflow", "skills", "extensions", "plugins", "tools", "subagent_topology", "environment", "network"}
+var publishedScenarioID = regexp.MustCompile(`^rodeo:[a-z0-9]+(?:-[a-z0-9]+)*@[1-9][0-9]*$`)
 
 func Load(path string) (Manifest, error) {
 	raw, err := os.ReadFile(path)
@@ -122,6 +124,9 @@ func (m Manifest) Validate() error {
 	for _, scenario := range m.Scenarios {
 		if scenario.ID == "" || scenarioSeen[scenario.ID] {
 			return fmt.Errorf("scenario ids must be present and unique")
+		}
+		if !publishedScenarioID.MatchString(scenario.ID) {
+			return fmt.Errorf("scenario %q is not publishable; studies require rodeo:slug@version IDs", scenario.ID)
 		}
 		if len(scenario.Digest) != 64 {
 			return fmt.Errorf("scenario %q needs a 64-character digest", scenario.ID)

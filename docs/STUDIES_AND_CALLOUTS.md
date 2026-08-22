@@ -8,7 +8,7 @@
 
 Before either path, run `command -v hbench` and `hbench version`. Do not change `PATH` silently to work around a version mismatch. Every command after `hbench run` should use its printed run ID, especially after a retry.
 
-`hb.study.v1` describes a complete experiment. It fixes the question, sources, comparison mode, scenario versions, setup arms, changed axes, repeats, random seed, judge protocol, win rule, and post-run stop thresholds. `controlled` studies reject undeclared setup differences. `ecological` studies compare complete real-world bundles and disclose their confounds.
+`hb.study.v1` describes a complete experiment. Every Study scenario uses `rodeo:slug@version` and that public version's `manifest_digest`; embedded local scenario IDs are for direct rides only. The contract fixes the question, sources, comparison mode, scenario versions, setup arms, changed axes, repeats, random seed, judge protocol, win rule, and post-run stop thresholds. `controlled` studies reject undeclared setup differences. `ecological` studies compare complete real-world bundles and disclose their confounds.
 
 Study execution is sequential by default. The seed randomizes the arm and scenario order. Each finished cell is saved under `hb-out/studies`, so the same command resumes after an interruption. `hbench study run` requires `--approve-spend`. Publishing is a separate command.
 

@@ -312,8 +312,9 @@ func TestSetupAndJudgeEnvironmentExcludesCredentials(t *testing.T) {
 	}
 }
 
-func TestPiHarnessGetsOnlySelectedProviderKey(t *testing.T) {
+func TestPiHarnessGetsSelectedProviderKeyAndModelCatalog(t *testing.T) {
 	home := t.TempDir()
+	writeFile(t, filepath.Join(home, ".pi", "agent", "models-store.json"), `{"openrouter":{"models":[{"id":"stealth/ox-alpha"}]}}`)
 	t.Setenv("HOME", home)
 	t.Setenv("OPENROUTER_API_KEY", "selected")
 	t.Setenv("OPENAI_API_KEY", "must-not-leak")
@@ -326,6 +327,10 @@ func TestPiHarnessGetsOnlySelectedProviderKey(t *testing.T) {
 	joined := strings.Join(env, "\n")
 	if !strings.Contains(joined, "OPENROUTER_API_KEY=selected") || strings.Contains(joined, "OPENAI_API_KEY=") {
 		t.Fatalf("isolated Pi env=%v", env)
+	}
+	copied, err := os.ReadFile(filepath.Join(l.RunDir(rec.ID), "harness-home", "pi", "models-store.json"))
+	if err != nil || !strings.Contains(string(copied), "stealth/ox-alpha") {
+		t.Fatalf("copied catalog=%s err=%v", copied, err)
 	}
 }
 

@@ -61,6 +61,20 @@ not json
 	}
 }
 
+func TestFreezePiPriceSnapshotCompletesCatalogCost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models-store.json")
+	if err := os.WriteFile(path, []byte(`{"openrouter":{"checkedAt":123,"models":[{"id":"stealth/ox-alpha","cost":{"input":0,"output":0}}]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input, output, cost := 10, 2, 0.0
+	complete := false
+	telemetry := Telemetry{TokensIn: &input, TokensOut: &output, EstimatedUSD: &cost, CostKind: "estimated", Complete: &complete}
+	freezePiPriceSnapshot(&telemetry, path, "openrouter", "stealth/ox-alpha")
+	if telemetry.Complete == nil || !*telemetry.Complete || !strings.Contains(telemetry.PriceSnapshot, `"checked_at":123`) {
+		t.Fatalf("telemetry=%+v", telemetry)
+	}
+}
+
 func TestExtractPiTelemetryAggregatesSubagentResults(t *testing.T) {
 	path := writeTelemetryFixture(t, `{"type":"message_end","message":{"usage":{"totalTokens":40,"input":12,"output":3,"cost":{"total":0.05}}}}
 {"type":"tool_result","details":{"results":[{"runId":"child-123","model":"gpt-5.6-luna","totalTokens":50,"totalCost":0.2}]}}`)

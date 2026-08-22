@@ -10,7 +10,15 @@ import (
 )
 
 func valid() Manifest {
-	return Manifest{Schema: Schema, ID: "test", Question: "Which wins?", ComparisonMode: "controlled", Scenarios: []Scenario{{ID: "one@1", Digest: strings.Repeat("a", 64)}}, Arms: []Arm{{ID: "a", Harness: "codex", Version: "test", Model: "same"}, {ID: "b", Harness: "pi", Version: "test", Model: "same"}}, VariedAxes: []string{"harness"}, Repeats: 3, JudgeProtocol: "scenario-default", WinRule: WinRule, Budget: Budget{MaxMinutes: 45}}
+	return Manifest{Schema: Schema, ID: "test", Question: "Which wins?", ComparisonMode: "controlled", Scenarios: []Scenario{{ID: "rodeo:one@1", Digest: strings.Repeat("a", 64)}}, Arms: []Arm{{ID: "a", Harness: "codex", Version: "test", Model: "same"}, {ID: "b", Harness: "pi", Version: "test", Model: "same"}}, VariedAxes: []string{"harness"}, Repeats: 3, JudgeProtocol: "scenario-default", WinRule: WinRule, Budget: Budget{MaxMinutes: 45}}
+}
+
+func TestRejectsLocalScenarioIDsBeforeExecution(t *testing.T) {
+	m := valid()
+	m.Scenarios[0].ID = "one"
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "rodeo:slug@version") {
+		t.Fatalf("got %v", err)
+	}
 }
 
 func TestControlledRejectsUndeclaredDifference(t *testing.T) {
@@ -56,7 +64,7 @@ func TestYAMLTags(t *testing.T) {
 }
 
 func TestDigestMatchesRailsCanonicalJSON(t *testing.T) {
-	const expected = "c146fc170111dbe83ead88bb1d6c591984f22b906fe20cad79e6f91ed5a42906"
+	const expected = "34799cbeabed8b5b394aa66abe7f3f85c324b2c4dfb3193652a38a290a7ef286"
 	if got := valid().Digest(); got != expected {
 		t.Fatalf("digest=%s want=%s", got, expected)
 	}
@@ -68,7 +76,7 @@ func TestDigestMatchesRailsForHTMLUnicodeAndDecimalValues(t *testing.T) {
 	m.Sources = []Source{{URL: "https://example.com/?a=1&b=2", Author: "A&B"}}
 	limit := 0.125
 	m.Budget.MaxUSDPerRun = &limit
-	const expected = "58d1fc3d164ecbdc655fcd7f9110e40a331031077cf282bd98d0de227f6060be"
+	const expected = "ddc33f9af6a0718c99a6fd2119f6ffcae0fe2fae1c0e8d21cf90df77e57dca15"
 	if got := m.Digest(); got != expected {
 		t.Fatalf("digest=%s want=%s", got, expected)
 	}
