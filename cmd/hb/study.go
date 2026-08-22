@@ -463,11 +463,11 @@ func publishStudy(path string, m studycontract.Manifest, args []string) error {
 	}
 	links := make([]map[string]any, 0, len(s.Completed))
 	for _, c := range s.Completed {
-		out, err := publish.Publish(layout(), c.RunID, nil)
+		_, err := publish.Publish(layout(), c.RunID, nil)
 		if err != nil {
 			return err
 		}
-		links = append(links, map[string]any{"client_run_id": c.RunID, "arm_id": c.Arm, "scenario_id": c.Scenario, "repeat": c.Repeat, "published_run_id": out["id"]})
+		links = append(links, studyRunLink(c))
 	}
 	out, err := publish.AuthenticatedJSON(http.MethodPost, "/api/v1/studies", map[string]any{"schema": "hb.study.publish.v1", "manifest": m, "contract_digest": m.Digest(), "callout_slug": *calloutSlug, "runs": links}, nil)
 	if err != nil {
@@ -475,6 +475,10 @@ func publishStudy(path string, m studycontract.Manifest, args []string) error {
 	}
 	fmt.Printf("Published study: %v\n", out["url"])
 	return nil
+}
+
+func studyRunLink(c studyCell) map[string]any {
+	return map[string]any{"client_run_id": c.RunID, "arm_id": c.Arm, "scenario_id": c.Scenario, "repeat": c.Repeat}
 }
 
 func cmdCallout(args []string) error {

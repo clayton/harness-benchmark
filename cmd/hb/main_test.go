@@ -166,6 +166,16 @@ func TestStudyRefusesUntrustedExternalScenarioBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestStudyRunLinkMatchesServerSchema(t *testing.T) {
+	link := studyRunLink(studyCell{Arm: "a", Scenario: "rodeo:task@1", Repeat: 2, RunID: "deadbeefcafe"})
+	if len(link) != 4 || link["client_run_id"] != "deadbeefcafe" || link["arm_id"] != "a" || link["scenario_id"] != "rodeo:task@1" || link["repeat"] != 2 {
+		t.Fatalf("link=%v", link)
+	}
+	if _, found := link["published_run_id"]; found {
+		t.Fatalf("server rejects published_run_id: %v", link)
+	}
+}
+
 func TestPublishHelpDoesNotUpload(t *testing.T) {
 	out := capture(t, []string{"publish", "--help"})
 	if !strings.Contains(out, "privacy-filtered run") {
