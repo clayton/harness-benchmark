@@ -233,6 +233,9 @@ func TestHeadlessLaunchNeverBuildsAShellCommand(t *testing.T) {
 	if got.Program != "codex" || got.Args[len(got.Args)-1] != prompt {
 		t.Fatalf("prompt was not preserved as one argv value: %+v", got)
 	}
+	if !strings.Contains(strings.Join(got.Args, " "), "--sandbox workspace-write") {
+		t.Fatalf("codex launch is not writable: %+v", got)
+	}
 }
 
 func TestCodexTopologyLocksChildModelEffortAndCount(t *testing.T) {

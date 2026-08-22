@@ -306,7 +306,7 @@ func HeadlessLaunchProfile(p Profile, prompt string) LaunchSpec {
 		}
 		return LaunchSpec{Program: harnessProgram(harness), Args: append(args, prompt)}
 	case "codex":
-		args := []string{"exec", "--skip-git-repo-check", "--json", "--ephemeral", "--ignore-user-config"}
+		args := []string{"exec", "--skip-git-repo-check", "--json", "--ephemeral", "--ignore-user-config", "--sandbox", "workspace-write"}
 		if model != "" {
 			args = append(args, "-m", model)
 		}
