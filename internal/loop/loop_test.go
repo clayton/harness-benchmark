@@ -312,6 +312,23 @@ func TestSetupAndJudgeEnvironmentExcludesCredentials(t *testing.T) {
 	}
 }
 
+func TestPiHarnessGetsOnlySelectedProviderKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("OPENROUTER_API_KEY", "selected")
+	t.Setenv("OPENAI_API_KEY", "must-not-leak")
+	l := paths.New(t.TempDir(), t.TempDir())
+	rec := RunRecord{ID: "aabbccddeeff", Harness: "pi", Metadata: map[string]any{"profile": Profile{Harness: "pi", Provider: "openrouter"}}}
+	env, err := isolatedHarnessEnv(l, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(env, "\n")
+	if !strings.Contains(joined, "OPENROUTER_API_KEY=selected") || strings.Contains(joined, "OPENAI_API_KEY=") {
+		t.Fatalf("isolated Pi env=%v", env)
+	}
+}
+
 func gitOutput(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)

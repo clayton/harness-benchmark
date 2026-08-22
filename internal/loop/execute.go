@@ -179,7 +179,16 @@ func isolatedHarnessEnv(l paths.Layout, rec RunRecord) ([]string, error) {
 		if err := copyAuthFile(filepath.Join(home, ".pi", "agent", "auth.json"), filepath.Join(piHome, "auth.json")); err != nil {
 			return nil, err
 		}
-		return append(base, "PI_CODING_AGENT_DIR="+piHome, "PI_CODING_AGENT_SESSION_DIR="+filepath.Join(piHome, "sessions")), nil
+		if err := copyAuthFile(filepath.Join(home, ".pi", "agent", "models.json"), filepath.Join(piHome, "models.json")); err != nil {
+			return nil, err
+		}
+		piEnv := append(base, "PI_CODING_AGENT_DIR="+piHome, "PI_CODING_AGENT_SESSION_DIR="+filepath.Join(piHome, "sessions"))
+		if envName := providerAPIKeyEnv(profileProvider(rec)); envName != "" {
+			if key := os.Getenv(envName); key != "" {
+				piEnv = append(piEnv, envName+"="+key)
+			}
+		}
+		return piEnv, nil
 	case "cursor":
 		if err := copyJSONFields(filepath.Join(home, ".cursor", "cli-config.json"), filepath.Join(dir, ".cursor", "cli-config.json"), "authInfo"); err != nil {
 			return nil, err
@@ -193,6 +202,25 @@ func isolatedHarnessEnv(l paths.Layout, rec RunRecord) ([]string, error) {
 	default:
 		return base, nil
 	}
+}
+
+func profileProvider(rec RunRecord) string {
+	profile := Profile{}
+	if raw, ok := rec.Metadata["profile"]; ok {
+		encoded, _ := json.Marshal(raw)
+		_ = json.Unmarshal(encoded, &profile)
+	}
+	return profile.Provider
+}
+
+func providerAPIKeyEnv(provider string) string {
+	return map[string]string{
+		"anthropic":  "ANTHROPIC_API_KEY",
+		"google":     "GEMINI_API_KEY",
+		"openai":     "OPENAI_API_KEY",
+		"openrouter": "OPENROUTER_API_KEY",
+		"xai":        "XAI_API_KEY",
+	}[provider]
 }
 
 func copyAuthFile(source, dest string) error {
