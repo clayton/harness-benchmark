@@ -1,0 +1,32 @@
+schema: hb.study.v1
+id: ox-alpha-vs-gpt-5-6-sol-go-chi-20260822-r2
+question: Does OpenRouter stealth/ox-alpha match or beat OpenRouter GPT-5.6 Sol on the chi Tee byte-count bug when both use stock Pi 0.84.2 at high reasoning?
+comparison_mode: controlled
+scenarios:
+  - id: go-chi-tee-bytes-double-count
+    digest: 7d9d974a3bc686f57173801c1fb7354901ae8d8263b7b41afd5d2a6dc9974e6b
+arms:
+  - id: pi-openrouter-ox-alpha
+    harness: pi
+    harness_version: "0.84.2"
+    provider: openrouter
+    model: stealth/ox-alpha
+    reasoning: high
+    workflow: baseline
+  - id: pi-openrouter-gpt-5-6-sol
+    harness: pi
+    harness_version: "0.84.2"
+    provider: openrouter
+    model: openai/gpt-5.6-sol
+    reasoning: high
+    workflow: baseline
+varied_axes: [model]
+repeats: 3
+seed: 220826
+judge_protocol: scenario-default
+win_rule: callout-title-v1
+budget:
+  max_minutes_per_run: 15
+  max_usd_per_run: 1.00
+  max_usd_total: 6.00
+  max_tokens_per_run: 50000
