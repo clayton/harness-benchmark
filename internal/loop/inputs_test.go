@@ -116,3 +116,16 @@ func TestDetectHarnessIdentityReportsResolvedExecutable(t *testing.T) {
 		t.Fatalf("identity=%+v", identity)
 	}
 }
+
+func TestDetectHarnessIdentityAllowsSlowStartup(t *testing.T) {
+	bin := t.TempDir()
+	piPath := filepath.Join(bin, "pi")
+	if err := os.WriteFile(piPath, []byte("#!/bin/sh\nsleep 3\necho 0.84.2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	identity, err := DetectHarnessIdentity("pi")
+	if err != nil || identity.Version != "0.84.2" {
+		t.Fatalf("identity=%+v err=%v", identity, err)
+	}
+}

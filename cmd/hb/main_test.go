@@ -12,6 +12,7 @@ import (
 	"github.com/clayton/harness-benchmark/internal/corpus"
 	"github.com/clayton/harness-benchmark/internal/loop"
 	"github.com/clayton/harness-benchmark/internal/paths"
+	studycontract "github.com/clayton/harness-benchmark/internal/study"
 )
 
 func capture(t *testing.T, args []string) string {
@@ -104,6 +105,44 @@ func TestExternalScenarioRefusesUnattendedInput(t *testing.T) {
 		t.Fatalf("expected unattended trust refusal, got %v", err)
 	}
 }
+
+func TestPendingStudyRunCanResumeWithoutDuplicateSpend(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HB_DATA_DIR", filepath.Join(root, "data"))
+	t.Setenv("HB_OUT_DIR", filepath.Join(root, "out"))
+	l := layout()
+	rec := loop.RunRecord{ID: "aabbccddeeff", Status: "pending", Worktree: l.Worktree("aabbccddeeff"), Harness: "pi", Model: "model", CreatedAt: loop.Now()}
+	if err := loop.Save(l, rec); err != nil {
+		t.Fatal(err)
+	}
+	m := studycontract.Manifest{Schema: studycontract.Schema, ID: "resume", Question: "resume", ComparisonMode: "controlled", Scenarios: []studycontract.Scenario{{ID: "task", Digest: strings.Repeat("a", 64)}}, Arms: []studycontract.Arm{{ID: "a", Harness: "pi", Version: "0.84.2", Model: "model"}, {ID: "b", Harness: "pi", Version: "0.84.2", Model: "other"}}, VariedAxes: []string{"model"}, Repeats: 1, Seed: 1, JudgeProtocol: "default", WinRule: studycontract.WinRule, Budget: studycontract.Budget{MaxMinutes: 1}}
+	s := studyState{Schema: "hb.study.state.v1", StudyID: m.ID, Digest: m.Digest(), Pending: &studyCell{Arm: "a", Scenario: "task", Repeat: 1, RunID: rec.ID}}
+	if err := reconcilePendingStudyCell(m, &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.Pending == nil || s.Pending.RunID != rec.ID || len(s.Completed) != 0 {
+		t.Fatalf("pending study state changed: %+v", s)
+	}
+}
+
+func TestStudyBudgetAcceptsEstimatedCostForStopThreshold(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HB_DATA_DIR", filepath.Join(root, "data"))
+	t.Setenv("HB_OUT_DIR", filepath.Join(root, "out"))
+	l := layout()
+	cost, complete, tokens := 0.25, false, 10
+	rec := loop.RunRecord{ID: "aabbccddeeff", Status: "completed", Worktree: l.Worktree("aabbccddeeff"), Harness: "pi", Model: "model", CreatedAt: loop.Now(), Telemetry: loop.Telemetry{EstimatedUSD: &cost, Complete: &complete, TotalTokens: &tokens, TokenComplete: boolPointer(true)}}
+	if err := loop.Save(l, rec); err != nil {
+		t.Fatal(err)
+	}
+	perRun, total := 1.0, 2.0
+	m := studycontract.Manifest{Budget: studycontract.Budget{MaxMinutes: 1, MaxUSDPerRun: &perRun, MaxUSDTotal: &total}}
+	if err := enforceStudyBudget(m, studyState{Completed: []studyCell{{RunID: rec.ID}}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func boolPointer(value bool) *bool { return &value }
 
 func TestStudyRefusesUntrustedExternalScenarioBeforeExecution(t *testing.T) {
 	read, write, err := os.Pipe()

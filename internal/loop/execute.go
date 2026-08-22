@@ -248,7 +248,7 @@ func DetectHarnessIdentity(harness string) (HarnessIdentity, error) {
 	if err != nil {
 		return HarnessIdentity{}, fmt.Errorf("%s harness executable %q was not found on PATH", harness, program)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	raw, err := exec.CommandContext(ctx, path, "--version").Output()
 	if err != nil {

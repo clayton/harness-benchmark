@@ -145,9 +145,6 @@ func runStudy(m studycontract.Manifest, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := reconcilePendingStudyCell(m, &s); err != nil {
-		return err
-	}
 	if err := verifyStudyScenarios(m); err != nil {
 		return err
 	}
@@ -161,6 +158,9 @@ func runStudy(m studycontract.Manifest, args []string) error {
 		return err
 	}
 	if err := verifyStudyExecutionProfiles(m); err != nil {
+		return err
+	}
+	if err := reconcilePendingStudyCell(m, &s); err != nil {
 		return err
 	}
 	done := map[string]bool{}
@@ -190,22 +190,26 @@ func runStudy(m studycontract.Manifest, args []string) error {
 		if err != nil {
 			return err
 		}
-		profile := loop.Profile{ID: arm.ID, Harness: arm.Harness, HarnessVersion: arm.Version, Provider: arm.Provider, Model: arm.Model, Reasoning: arm.Reasoning, Workflow: arm.Workflow, Skills: arm.Skills, Extensions: arm.Extensions, Plugins: arm.Plugins, Tools: arm.Tools, Subagents: arm.Subagents, Environment: arm.Environment, Network: arm.Network, JudgeProtocol: m.JudgeProtocol, Budget: studyBudgetDescriptor(m), StudyID: m.ID, ContractDigest: m.Digest(), ArmID: c.Arm, Repeat: c.Repeat, ScenarioDigest: frozenScenario.Digest, StudyScenarioID: c.Scenario}
-		rec, err := loop.CreateRunWithProfile(layout(), sc, profile, true)
-		if err != nil {
-			return err
+		if s.Pending != nil && cellKey(s.Pending.Arm, s.Pending.Scenario, s.Pending.Repeat) == cellKey(c.Arm, c.Scenario, c.Repeat) {
+			c = *s.Pending
+		} else {
+			profile := loop.Profile{ID: arm.ID, Harness: arm.Harness, HarnessVersion: arm.Version, Provider: arm.Provider, Model: arm.Model, Reasoning: arm.Reasoning, Workflow: arm.Workflow, Skills: arm.Skills, Extensions: arm.Extensions, Plugins: arm.Plugins, Tools: arm.Tools, Subagents: arm.Subagents, Environment: arm.Environment, Network: arm.Network, JudgeProtocol: m.JudgeProtocol, Budget: studyBudgetDescriptor(m), StudyID: m.ID, ContractDigest: m.Digest(), ArmID: c.Arm, Repeat: c.Repeat, ScenarioDigest: frozenScenario.Digest, StudyScenarioID: c.Scenario}
+			rec, err := loop.CreateRunWithProfile(layout(), sc, profile, true)
+			if err != nil {
+				return err
+			}
+			c.RunID = rec.ID
+			s.Pending = &c
+			if err := saveStudyState(m, s); err != nil {
+				return err
+			}
 		}
-		c.RunID = rec.ID
-		s.Pending = &c
-		if err := saveStudyState(m, s); err != nil {
-			return err
-		}
-		fmt.Printf("running %s / %s / repeat %d as %s\n", c.Arm, c.Scenario, c.Repeat, rec.ID)
-		res, execErr := loop.Execute(layout(), rec.ID, time.Duration(m.Budget.MaxMinutes)*time.Minute)
+		fmt.Printf("running %s / %s / repeat %d as %s\n", c.Arm, c.Scenario, c.Repeat, c.RunID)
+		res, execErr := loop.Execute(layout(), c.RunID, time.Duration(m.Budget.MaxMinutes)*time.Minute)
 		if res.LogPath == "" && execErr != nil {
 			return execErr
 		}
-		finished, finishErr := loop.Finish(layout(), rec.ID, sc, res.WallMS, "hbench study run", true)
+		finished, finishErr := loop.Finish(layout(), c.RunID, sc, res.WallMS, "hbench study run", true)
 		if finishErr != nil {
 			return finishErr
 		}
@@ -256,15 +260,15 @@ func enforceStudyBudget(m studycontract.Manifest, s studyState) error {
 			}
 		}
 		if m.Budget.MaxUSDPerRun != nil {
-			if rec.Telemetry.EstimatedUSD == nil || rec.Telemetry.Complete == nil || !*rec.Telemetry.Complete {
-				return fmt.Errorf("run %s has no complete cost telemetry for its dollar limit", cell.RunID)
+			if rec.Telemetry.EstimatedUSD == nil {
+				return fmt.Errorf("run %s has no cost estimate for its dollar limit", cell.RunID)
 			}
 			if *rec.Telemetry.EstimatedUSD > *m.Budget.MaxUSDPerRun {
 				return fmt.Errorf("run %s exceeded the dollar limit", cell.RunID)
 			}
 		}
-		if m.Budget.MaxUSDTotal != nil && (rec.Telemetry.EstimatedUSD == nil || rec.Telemetry.Complete == nil || !*rec.Telemetry.Complete) {
-			return fmt.Errorf("run %s has no complete cost telemetry for the total dollar limit", cell.RunID)
+		if m.Budget.MaxUSDTotal != nil && rec.Telemetry.EstimatedUSD == nil {
+			return fmt.Errorf("run %s has no cost estimate for the total dollar limit", cell.RunID)
 		}
 		if rec.Telemetry.EstimatedUSD != nil {
 			totalCost += *rec.Telemetry.EstimatedUSD
@@ -324,12 +328,19 @@ func reconcilePendingStudyCell(m studycontract.Manifest, s *studyState) error {
 	if err != nil {
 		return fmt.Errorf("study has pending run %s that cannot be loaded: %w", s.Pending.RunID, err)
 	}
-	if len(rec.Judges) == 0 || (rec.Status != "completed" && rec.Status != "failed" && rec.Status != "timeout" && rec.Status != "budget_exceeded") {
+	switch rec.Status {
+	case "pending":
+		return nil
+	case "completed", "failed", "timeout", "budget_exceeded":
+		if len(rec.Judges) == 0 {
+			return fmt.Errorf("study has unresolved pending run %s with status %s and no judge result", rec.ID, rec.Status)
+		}
+		s.Completed = append(s.Completed, *s.Pending)
+		s.Pending = nil
+		return saveStudyState(m, *s)
+	default:
 		return fmt.Errorf("study has unresolved pending run %s with status %s; inspect it before resuming to avoid duplicate spend", rec.ID, rec.Status)
 	}
-	s.Completed = append(s.Completed, *s.Pending)
-	s.Pending = nil
-	return saveStudyState(m, *s)
 }
 
 func verifyStudyScenarios(m studycontract.Manifest) error {
