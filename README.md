@@ -24,7 +24,7 @@ Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 
 | | |
 |---|---|
-| **Status** | v0.5.3 — complete direct-ride identity and uniform scenario manifests |
+| **Status** | v0.5.4 — resumable Study cells and robust harness preflight |
 | **CLI** | `hbench` |
 | **License** | MIT |
 
