@@ -24,7 +24,7 @@ Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 
 | | |
 |---|---|
-| **Status** | v0.5.5 — provider-scoped Pi credentials and resumable Study cells |
+| **Status** | v0.5.6 — publishable Study preflight and frozen Pi price catalogs |
 | **CLI** | `hbench` |
 | **License** | MIT |
 

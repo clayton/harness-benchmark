@@ -23,7 +23,7 @@ import (
 	"github.com/clayton/harness-benchmark/skills"
 )
 
-const version = "0.5.5"
+const version = "0.5.6"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
