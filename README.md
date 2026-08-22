@@ -24,7 +24,7 @@ Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 
 | | |
 |---|---|
-| **Status** | v0.5.4 — resumable Study cells and robust harness preflight |
+| **Status** | v0.5.5 — provider-scoped Pi credentials and resumable Study cells |
 | **CLI** | `hbench` |
 | **License** | MIT |
 
