@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -121,7 +123,10 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	closeErr := logF.Close()
 	rec.Telemetry = ExtractTelemetry(rec.Harness, logPath)
 	if rec.Harness == "pi" {
-		freezePiPriceSnapshot(&rec.Telemetry, filepath.Join(l.RunDir(id), "harness-home", "pi", "models-store.json"), profile.Provider, profile.Model)
+		piHome := filepath.Join(l.RunDir(id), "harness-home", "pi")
+		if !completePiLocalCost(&rec.Telemetry, filepath.Join(piHome, "models.json"), profile.Provider, profile.Model) {
+			freezePiPriceSnapshot(&rec.Telemetry, filepath.Join(piHome, "models-store.json"), profile.Provider, profile.Model)
+		}
 	}
 	if !profileChildUsageComplete(profile, rec.Telemetry) {
 		complete := false
@@ -208,6 +213,68 @@ func isolatedHarnessEnv(l paths.Layout, rec RunRecord) ([]string, error) {
 	default:
 		return base, nil
 	}
+}
+
+func completePiLocalCost(telemetry *Telemetry, path, provider, model string) bool {
+	if telemetry.TokensIn == nil || telemetry.TokensOut == nil || telemetry.UsageByAgent == nil || len(*telemetry.UsageByAgent) != 1 {
+		return false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var config struct {
+		Providers map[string]struct {
+			BaseURL string `json:"baseUrl"`
+			Models  []struct {
+				ID   string         `json:"id"`
+				Cost map[string]any `json:"cost"`
+			} `json:"models"`
+		} `json:"providers"`
+	}
+	if json.Unmarshal(raw, &config) != nil {
+		return false
+	}
+	providerConfig, ok := config.Providers[provider]
+	if !ok {
+		return false
+	}
+	endpoint, err := url.Parse(providerConfig.BaseURL)
+	if err != nil {
+		return false
+	}
+	host := endpoint.Hostname()
+	ip := net.ParseIP(host)
+	if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+		return false
+	}
+	var rates map[string]any
+	for _, configuredModel := range providerConfig.Models {
+		if configuredModel.ID == model {
+			rates = configuredModel.Cost
+			break
+		}
+	}
+	for _, key := range []string{"input", "output", "cacheRead", "cacheWrite"} {
+		if value, ok := rates[key].(float64); !ok || value != 0 {
+			return false
+		}
+	}
+
+	zero, complete := 0.0, true
+	telemetry.EstimatedUSD = &zero
+	telemetry.CostKind = "local"
+	telemetry.Complete = &complete
+	(*telemetry.UsageByAgent)[0].EstimatedUSD = &zero
+	snapshot, _ := json.Marshal(map[string]any{
+		"provider":                provider,
+		"model":                   model,
+		"cost_scope":              "provider_api_inference",
+		"cost_per_million_tokens": rates,
+		"excluded":                []string{"electricity", "hardware"},
+	})
+	telemetry.PriceSnapshot = string(snapshot)
+	return true
 }
 
 func freezePiPriceSnapshot(telemetry *Telemetry, path, provider, model string) {

@@ -61,6 +61,39 @@ not json
 	}
 }
 
+func TestCompletePiLocalCost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	if err := os.WriteFile(path, []byte(`{"providers":{"mlx-lm":{"baseUrl":"http://127.0.0.1:8080/v1","models":[{"id":"qwen-local","cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input, output, remoteCost := 10, 2, 99.0
+	complete := false
+	usage := []AgentUsage{{AgentID: "parent", EstimatedUSD: &remoteCost}}
+	telemetry := Telemetry{TokensIn: &input, TokensOut: &output, EstimatedUSD: &remoteCost, CostKind: "estimated", Complete: &complete, UsageByAgent: &usage}
+	if !completePiLocalCost(&telemetry, path, "mlx-lm", "qwen-local") {
+		t.Fatal("loopback model was not recognized as local")
+	}
+	if telemetry.Complete == nil || !*telemetry.Complete || telemetry.EstimatedUSD == nil || *telemetry.EstimatedUSD != 0 || telemetry.CostKind != "local" || !strings.Contains(telemetry.PriceSnapshot, `"cost_scope":"provider_api_inference"`) {
+		t.Fatalf("telemetry=%+v", telemetry)
+	}
+	if usage[0].EstimatedUSD == nil || *usage[0].EstimatedUSD != 0 {
+		t.Fatalf("agent usage=%+v", usage[0])
+	}
+}
+
+func TestCompletePiLocalCostRejectsRemoteProvider(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "models.json")
+	if err := os.WriteFile(path, []byte(`{"providers":{"mlx-lm":{"baseUrl":"https://models.example.com/v1","models":[{"id":"qwen-local","cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}]}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	input, output := 10, 2
+	usage := []AgentUsage{{AgentID: "parent"}}
+	telemetry := Telemetry{TokensIn: &input, TokensOut: &output, UsageByAgent: &usage}
+	if completePiLocalCost(&telemetry, path, "mlx-lm", "qwen-local") {
+		t.Fatal("remote provider was classified as zero-cost local inference")
+	}
+}
+
 func TestFreezePiPriceSnapshotCompletesCatalogCost(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models-store.json")
 	if err := os.WriteFile(path, []byte(`{"openrouter":{"checkedAt":123,"models":[{"id":"stealth/ox-alpha","cost":{"input":0,"output":0}}]}}`), 0o600); err != nil {

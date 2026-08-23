@@ -24,7 +24,7 @@ Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 
 | | |
 |---|---|
-| **Status** | v0.5.7 — end-to-end publishable Studies and frozen Pi price catalogs |
+| **Status** | v0.5.8 — local Pi models record complete $0 provider/API inference cost |
 | **CLI** | `hbench` |
 | **License** | MIT |
 
