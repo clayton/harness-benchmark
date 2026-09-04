@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/clayton/harness-benchmark/internal/corpus"
 	"gopkg.in/yaml.v3"
 )
 
@@ -20,17 +21,20 @@ var pinnedImage = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:\-]*@sha256:[0-9
 var relayHosts = map[string]bool{"api.openai.com": true, "api.anthropic.com": true, "openrouter.ai": true, "api.x.ai": true, "generativelanguage.googleapis.com": true}
 
 type Pack struct {
-	Schema                 string         `yaml:"schema"`
-	ScenarioSlug           string         `yaml:"scenario_slug"`
-	ScenarioVersion        int            `yaml:"scenario_version"`
-	TargetRef              string         `yaml:"target_ref"`
-	EnvironmentImageDigest string         `yaml:"environment_image_digest"`
-	RelayImageDigest       string         `yaml:"relay_image_digest"`
-	ProtocolID             string         `yaml:"protocol_id"`
-	EvaluatorCommands      []string       `yaml:"evaluator_commands"`
-	Execution              Execution      `yaml:"execution"`
-	Relay                  Relay          `yaml:"relay"`
-	Budget                 map[string]any `yaml:"budget"`
+	Schema          string `yaml:"schema"`
+	ScenarioSlug    string `yaml:"scenario_slug"`
+	ScenarioVersion int    `yaml:"scenario_version"`
+	TargetRef       string `yaml:"target_ref"`
+	// TargetWorkspace keeps an original scaffold's private solution inside the
+	// evaluator pack. It is never copied into the public scenario manifest.
+	TargetWorkspace        map[string]string `yaml:"target_workspace,omitempty"`
+	EnvironmentImageDigest string            `yaml:"environment_image_digest"`
+	RelayImageDigest       string            `yaml:"relay_image_digest"`
+	ProtocolID             string            `yaml:"protocol_id"`
+	EvaluatorCommands      []string          `yaml:"evaluator_commands"`
+	Execution              Execution         `yaml:"execution"`
+	Relay                  Relay             `yaml:"relay"`
+	Budget                 map[string]any    `yaml:"budget"`
 }
 
 type Execution struct {
@@ -73,8 +77,13 @@ func LoadPack(path string) (Pack, string, error) {
 	if pack.Schema != "rodeo.evaluator.v1" {
 		return Pack{}, "", fmt.Errorf("unsupported evaluator schema %q", pack.Schema)
 	}
-	if pack.ScenarioSlug == "" || pack.ScenarioVersion < 1 || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(pack.TargetRef) {
+	if pack.ScenarioSlug == "" || pack.ScenarioVersion < 1 || (pack.TargetRef == "" && len(pack.TargetWorkspace) == 0) || (pack.TargetRef != "" && len(pack.TargetWorkspace) > 0) || (pack.TargetRef != "" && !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(pack.TargetRef)) {
 		return Pack{}, "", fmt.Errorf("evaluator pack scenario and target are required")
+	}
+	if len(pack.TargetWorkspace) > 0 {
+		if _, err := corpus.ScaffoldPaths(pack.TargetWorkspace); err != nil {
+			return Pack{}, "", fmt.Errorf("invalid private target workspace: %w", err)
+		}
 	}
 	if !pinnedImage.MatchString(pack.EnvironmentImageDigest) {
 		return Pack{}, "", fmt.Errorf("environment image must be pinned by sha256 digest")
@@ -117,6 +126,22 @@ func LoadPack(path string) (Pack, string, error) {
 	}
 	digest, err := DigestDir(path)
 	return pack, digest, err
+}
+
+// ValidateForScenario applies the scenario-dependent private target rules
+// after a pack is loaded. A target workspace is valid only for a scaffold
+// base; ordinary repository scenarios use exactly one target commit.
+func (pack Pack) ValidateForScenario(scenario corpus.Scenario) error {
+	if len(pack.TargetWorkspace) > 0 && scenario.Workspace.Kind != "scaffold" {
+		return fmt.Errorf("private target workspace requires a scaffold scenario")
+	}
+	if len(pack.TargetWorkspace) == 0 && pack.TargetRef == "" {
+		return fmt.Errorf("evaluator pack requires exactly one private target")
+	}
+	if len(pack.TargetWorkspace) > 0 && pack.TargetRef != "" {
+		return fmt.Errorf("evaluator pack cannot define both target_ref and target_workspace")
+	}
+	return nil
 }
 
 func minimumRequestUSD(relay Relay) float64 {

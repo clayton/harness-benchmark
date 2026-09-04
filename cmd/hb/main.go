@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	version           = "0.5.9"
+	version           = "0.6.0"
 	defaultRelayImage = "docker.io/claytonlz/agent-rodeo-model-relay@sha256:bcb8fa0938bc93d1c029d21978b7e8339ed24adf179109d5a79f48a5a6958dfa"
 )
 
@@ -80,6 +80,10 @@ func run(args []string) error {
 		return cmdCallout(args[1:])
 	case "skill":
 		return cmdSkill(args[1:])
+	case "setup":
+		return cmdSetup(args[1:])
+	case "scenario":
+		return cmdScenario(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage())
 	}
@@ -270,6 +274,10 @@ Commands:
   hbench callout create STUDY.yaml --statement "..."
   hbench callout challenge <url>
   hbench skill install [--target DIR]
+  hbench setup save <id> [flags]
+  hbench setup list
+  hbench setup show <id>
+  hbench scenario new|validate [flags]
 `
 }
 
@@ -370,6 +378,92 @@ func cmdSkill(args []string) error {
 		return err
 	}
 	fmt.Printf("Installed run-agent-rodeo-study at %s\n", filepath.Join(*target, "run-agent-rodeo-study"))
+	return nil
+}
+
+type stringListFlag []string
+
+func (f *stringListFlag) String() string { return strings.Join(*f, ",") }
+func (f *stringListFlag) Set(value string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fmt.Errorf("value cannot be empty")
+	}
+	*f = append(*f, value)
+	return nil
+}
+
+func cmdSetup(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: hbench setup save <id> | list | show <id>")
+	}
+	l := layout()
+	switch args[0] {
+	case "list":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: hbench setup list")
+		}
+		setups, err := loop.ListSetups(l)
+		if err != nil {
+			return err
+		}
+		for _, setup := range setups {
+			fmt.Printf("%s\t%s\t%s\t%s/%s\t%s\n", setup.ID, setup.Profile.Mode, setup.Profile.Harness, setup.Profile.Provider, setup.Profile.Model, setup.Profile.Workflow)
+		}
+		return nil
+	case "show":
+		if len(args) != 2 {
+			return fmt.Errorf("usage: hbench setup show <id>")
+		}
+		setup, err := loop.LoadSetup(l, args[1])
+		if err != nil {
+			return err
+		}
+		raw, err := json.MarshalIndent(setup, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(raw))
+		return nil
+	case "save":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: hbench setup save <id> [flags]")
+		}
+		return cmdSetupSave(l, args[1], args[2:])
+	default:
+		return fmt.Errorf("unknown setup command %q; use save, list, or show", args[0])
+	}
+}
+
+func cmdSetupSave(l paths.Layout, id string, args []string) error {
+	fs := flag.NewFlagSet("setup save", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	harness := fs.String("harness", "", "harness: grok, pi, claude, codex, cursor, or manual")
+	provider := fs.String("provider", "", "model provider")
+	model := fs.String("model", "", "model id")
+	reasoning := fs.String("reasoning", "", "reasoning level")
+	workflow := fs.String("workflow", "baseline", "workflow label; personal mode records it without claiming adapter enforcement")
+	mode := fs.String("mode", "personal", "personal or clean-baseline")
+	var skills, extensions, plugins, skillDirs stringListFlag
+	fs.Var(&skills, "skill", "exact installed skill package or path (repeatable)")
+	fs.Var(&skillDirs, "skill-dir", "local skill directory to freeze on each run (repeatable; Pi only)")
+	fs.Var(&extensions, "extension", "exact installed extension package or path (repeatable)")
+	fs.Var(&plugins, "plugin", "exact installed plugin package or path (repeatable)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *harness == "" {
+		return fmt.Errorf("--harness is required when saving a setup")
+	}
+	profile := loop.Profile{ID: id, Mode: *mode, Harness: *harness, Provider: *provider, Model: *model, Reasoning: *reasoning, Workflow: *workflow, Skills: skills, LocalSkills: skillDirs, Extensions: extensions, Plugins: plugins}
+	profile, err := loop.NormalizeDirectProfile(profile)
+	if err != nil {
+		return err
+	}
+	if err := loop.SaveSetup(l, loop.Setup{ID: id, Name: id, Profile: profile}); err != nil {
+		return err
+	}
+	fmt.Printf("Saved setup %s (%s)\n", id, profile.Mode)
 	return nil
 }
 
@@ -548,6 +642,11 @@ func cmdRunMode(args []string, ride bool) error {
   --model          model id (pi: grok-4.6 uses xAI; x-ai/grok-4.6 uses OpenRouter)
   --reasoning      default, off, minimal, low, medium, high, xhigh, max, or ultra
   --thinking       alias for --reasoning
+  --setup          load a saved setup profile from hbench setup save
+  --mode           personal or clean-baseline (default: clean-baseline)
+  --workflow       workflow label; personal mode records it without claiming adapter enforcement
+  --skill          exact installed skill package or path (repeatable)
+  --skill-dir      local skill directory to freeze for this run (repeatable; Pi only)
   --runtime        ride runtime: auto, docker, podman, nerdctl, or native
   --relay-image    digest-pinned credential relay image
   --no-setup       skip setup commands in native mode
@@ -563,6 +662,12 @@ func cmdRunMode(args []string, ride bool) error {
 	provider := fs.String("provider", "", "model provider")
 	model := fs.String("model", "", "model id")
 	reasoning := fs.String("reasoning", "", "reasoning level")
+	setupID := fs.String("setup", "", "saved setup profile id")
+	mode := fs.String("mode", "", "personal or clean-baseline")
+	workflow := fs.String("workflow", "", "workflow label")
+	var skills, skillDirs stringListFlag
+	fs.Var(&skills, "skill", "exact installed skill package or path (repeatable)")
+	fs.Var(&skillDirs, "skill-dir", "local skill directory to freeze for this run (repeatable; Pi only)")
 	fs.StringVar(reasoning, "thinking", "", "alias for --reasoning")
 	runtimeDefault := "native"
 	if ride {
@@ -582,7 +687,7 @@ func cmdRunMode(args []string, ride bool) error {
 		}
 		return err
 	}
-	if *scenario == "" || *harness == "" {
+	if *scenario == "" {
 		fs.Usage()
 		return fmt.Errorf("usage: hbench %s -s <scenario> --harness <name>", command)
 	}
@@ -606,7 +711,40 @@ func cmdRunMode(args []string, ride bool) error {
 			return err
 		}
 	}
-	profile, err := loop.NormalizeDirectProfile(loop.Profile{Harness: *harness, Provider: *provider, Model: *model, Reasoning: *reasoning})
+	profile := loop.Profile{Harness: *harness, Provider: *provider, Model: *model, Reasoning: *reasoning, Mode: *mode, Workflow: *workflow, Skills: skills, LocalSkills: skillDirs}
+	if *setupID != "" {
+		saved, loadErr := loop.LoadSetup(l, *setupID)
+		if loadErr != nil {
+			return loadErr
+		}
+		profile = saved.Profile
+		// Direct flags are intentional overrides of the saved recipe.
+		if *harness != "" {
+			profile.Harness = *harness
+		}
+		if *provider != "" {
+			profile.Provider = *provider
+		}
+		if *model != "" {
+			profile.Model = *model
+		}
+		if *reasoning != "" {
+			profile.Reasoning = *reasoning
+		}
+		if *mode != "" {
+			profile.Mode = *mode
+		}
+		if *workflow != "" {
+			profile.Workflow = *workflow
+		}
+		profile.Skills = append(profile.Skills, skills...)
+		profile.LocalSkills = append(profile.LocalSkills, skillDirs...)
+	}
+	if profile.Harness == "" {
+		fs.Usage()
+		return fmt.Errorf("--harness is required unless --setup names a saved setup")
+	}
+	profile, err = loop.NormalizeDirectProfile(profile)
 	if err != nil {
 		return err
 	}
@@ -679,6 +817,12 @@ func cmdRunMode(args []string, ride bool) error {
 }
 
 func cmdOCIRide(l paths.Layout, sc corpus.Scenario, profile loop.Profile, runtimeName, relayImage string, maxUSD float64, yes bool) error {
+	if profile.Mode != "clean-baseline" {
+		return fmt.Errorf("OCI rides require --mode clean-baseline; use hbench run --runtime native for personal setup profiles")
+	}
+	if profile.Workflow != "baseline" || len(profile.Skills) > 0 || len(profile.Extensions) > 0 || len(profile.Plugins) > 0 || len(profile.LocalSkills) > 0 {
+		return fmt.Errorf("OCI rides support the clean baseline only; use hbench run --runtime native for workflow or skill experiments")
+	}
 	if profile.Harness != "pi" || profile.Provider != "openrouter" || profile.Model != "openrouter/z-ai/glm-5.3-flash" {
 		return fmt.Errorf("OCI rides currently require --harness pi --model openrouter/z-ai/glm-5.3-flash")
 	}
@@ -809,7 +953,7 @@ func saveOCIRide(l paths.Layout, sc corpus.Scenario, profile loop.Profile, runID
 		"prompt_sha256_16": fmt.Sprintf("%x", promptDigest)[:16],
 		"repo":             map[string]any{"base_ref": sc.Repo.BaseRef, "gold_ref": sc.Repo.GoldRef},
 		"config": map[string]any{
-			"id": record.ConfigID, "harness": profile.Harness, "harness_version": record.HarnessVersion,
+			"id": record.ConfigID, "mode": "clean-baseline", "harness": profile.Harness, "harness_version": record.HarnessVersion,
 			"provider": profile.Provider, "model": profile.Model, "reasoning": profile.Reasoning,
 			"workflow": "baseline", "interaction": "unattended", "budget": map[string]any{"max_minutes": 45, "max_usd": maxUSD},
 			"environment": map[string]any{"image_digest": sc.EnvironmentImageDigest}, "relay_image_digest": relayImage, "network": "relay-only", "runtime": rt,

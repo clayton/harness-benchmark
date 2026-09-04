@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -41,6 +42,9 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	if raw, ok := rec.Metadata["profile"]; ok {
 		encoded, _ := json.Marshal(raw)
 		_ = json.Unmarshal(encoded, &profile)
+	}
+	if err := verifyFrozenSkills(l, id, profile); err != nil {
+		return ExecResult{}, err
 	}
 	resolvedProfile, resolveErr := ResolveMeasuredProfile(profile)
 	if resolveErr != nil {
@@ -158,6 +162,23 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	return ExecResult{ReturnCode: rc, WallMS: wall, LogPath: logPath, TimedOut: timedOut}, waitErr
 }
 
+func verifyFrozenSkills(l paths.Layout, runID string, profile Profile) error {
+	for _, skill := range profile.FrozenSkills {
+		rel := filepath.Clean(filepath.FromSlash(skill.Path))
+		if filepath.IsAbs(rel) || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("frozen skill path is unsafe: %q", skill.Path)
+		}
+		digest, err := LocalSkillDigest(filepath.Join(l.RunDir(runID), rel))
+		if err != nil {
+			return fmt.Errorf("verify frozen skill %q: %w", skill.Name, err)
+		}
+		if digest != skill.Digest {
+			return fmt.Errorf("frozen skill %q changed in run %s: contract has %s, current content is %s", skill.Name, runID, skill.Digest, digest)
+		}
+	}
+	return nil
+}
+
 func isolatedHarnessEnv(l paths.Layout, rec RunRecord) ([]string, error) {
 	dir := filepath.Join(l.RunDir(rec.ID), "harness-home")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -169,6 +190,11 @@ func isolatedHarnessEnv(l paths.Layout, rec RunRecord) ([]string, error) {
 	}
 	base := []string{"HOME=" + dir, "XDG_CONFIG_HOME=" + xdg, "XDG_DATA_HOME=" + filepath.Join(dir, ".local", "share")}
 	home, _ := os.UserHomeDir()
+	profile := Profile{}
+	if raw, ok := rec.Metadata["profile"]; ok {
+		encoded, _ := json.Marshal(raw)
+		_ = json.Unmarshal(encoded, &profile)
+	}
 	switch rec.Harness {
 	case "codex":
 		codexHome := filepath.Join(dir, "codex")
@@ -177,6 +203,11 @@ func isolatedHarnessEnv(l paths.Layout, rec RunRecord) ([]string, error) {
 		}
 		if err := copyAuthFile(filepath.Join(home, ".codex", "auth.json"), filepath.Join(codexHome, "auth.json")); err != nil {
 			return nil, err
+		}
+		if profile.Mode == "personal" && profile.ConfigPath != "" {
+			if err := copyFrozenConfig(l, rec.ID, profile, filepath.Join(codexHome, "config.toml")); err != nil {
+				return nil, err
+			}
 		}
 		return append(base, "CODEX_HOME="+codexHome), nil
 	case "pi":
@@ -213,6 +244,23 @@ func isolatedHarnessEnv(l paths.Layout, rec RunRecord) ([]string, error) {
 	default:
 		return base, nil
 	}
+}
+
+func copyFrozenConfig(l paths.Layout, runID string, profile Profile, destination string) error {
+	rel := filepath.Clean(filepath.FromSlash(profile.ConfigPath))
+	if filepath.IsAbs(rel) || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("personal config path is unsafe: %q", profile.ConfigPath)
+	}
+	source := filepath.Join(l.RunDir(runID), rel)
+	raw, err := os.ReadFile(source)
+	if err != nil {
+		return fmt.Errorf("read frozen personal config: %w", err)
+	}
+	digest := sha256.Sum256(raw)
+	if profile.ConfigDigest == "" || profile.ConfigDigest != fmt.Sprintf("%x", digest) {
+		return fmt.Errorf("personal config digest changed in run %s", runID)
+	}
+	return copyAuthFile(source, destination)
 }
 
 func completePiLocalCost(telemetry *Telemetry, path, provider, model string) bool {

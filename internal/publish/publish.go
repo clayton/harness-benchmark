@@ -189,15 +189,19 @@ func BuildPayload(l paths.Layout, id string) (map[string]any, error) {
 			}
 			if config, ok := source["config"].(map[string]any); ok {
 				publicConfig := map[string]any{
-					"id": config["id"], "harness": config["harness"], "model": config["model"],
+					"id": config["id"], "mode": config["mode"], "harness": config["harness"], "model": config["model"],
 					"workflow": config["workflow"], "skills": config["skills"], "interaction": config["interaction"],
 				}
 				if judgeProtocol, _ := config["judge_protocol"].(string); judgeProtocol != "" {
 					publicConfig["judge_protocol"] = judgeProtocol
 				}
-				for _, key := range []string{"harness_version", "provider", "reasoning", "extensions", "plugins", "tools", "subagent_topology", "budget", "environment", "network", "relay_image_digest", "runtime"} {
+				for _, key := range []string{"harness_version", "provider", "reasoning", "extensions", "plugins", "tools", "subagent_topology", "frozen_skills", "config_sha256", "config_status", "budget", "environment", "network", "relay_image_digest", "runtime"} {
 					if meaningfulPublicConfigValue(config[key]) {
-						publicConfig[key] = config[key]
+						if key == "frozen_skills" {
+							publicConfig[key] = publicFrozenSkills(config[key])
+						} else {
+							publicConfig[key] = config[key]
+						}
 					}
 				}
 				snapshot["config"] = publicConfig
@@ -205,6 +209,28 @@ func BuildPayload(l paths.Layout, id string) (map[string]any, error) {
 		}
 	}
 	return map[string]any{"schema": "hb.publish.v1", "run": run, "snapshot": snapshot}, nil
+}
+
+// publicFrozenSkills strips run-local paths before a payload leaves the
+// workstation. Names, counts, and content hashes are enough to identify the
+// frozen inputs and keep the server independent of local filesystem layout.
+func publicFrozenSkills(value any) []map[string]any {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	public := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		data, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		entry := map[string]any{"name": data["name"], "sha256": data["sha256"], "files": data["files"]}
+		if meaningfulPublicConfigValue(entry["name"]) && meaningfulPublicConfigValue(entry["sha256"]) {
+			public = append(public, entry)
+		}
+	}
+	return public
 }
 
 func meaningfulPublicConfigValue(value any) bool {

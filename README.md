@@ -1,403 +1,188 @@
-# Harness Benchmark
+# Agent Rodeo
 
-**Compare coding-agent *systems*** — harness + model + tools + workflow — on fixed real-world tasks, with **quality and cost** side by side.
+`hbench` runs repeatable coding-agent benchmarks on your machine. It records
+the scenario, setup, patch, tests, telemetry, and a local HTML report. Nothing
+is uploaded until you run `hbench publish`.
 
-## Install
+## Install and inspect
+
+Install the pinned CLI, then check what is available:
 
 ```bash
 curl -fsSL https://agentrodeo.dev/install.sh | sh
-hbench
+hbench version
+hbench doctor
 ```
 
-The installer is pinned to a release tag. Checksums live in the script itself. It puts `hbench` in a directory already on your PATH when it can (Homebrew or `/usr/local/bin`). If it cannot, it prints one `export … && hbench` line for that terminal and says so if it appends to your shell rc.
+`doctor` reports installed harnesses, detected skills, and scenario
+prerequisites. It does not install tools.
 
-`hbench` with no args prints **one** command. `hbench doctor` is the full report. Nothing spends tokens until you paste the printed command. The old `hb` name collided with Honeybadger's CLI, so the binary is `hbench`.
+## Run your own setup
 
-Run a published scenario as a participant:
+Use a saved profile when you want to try a model, reasoning level, workflow,
+or local skill tree more than once:
 
 ```bash
-hbench ride -s rodeo:js-commander-negative-exp-E@3 --harness pi \
-  --model openrouter/z-ai/glm-5.3-flash --approve-spend
+hbench setup save my-pi \
+  --harness pi \
+  --provider openrouter \
+  --model openrouter/z-ai/glm-5.3-flash \
+  --reasoning high \
+  --workflow plan-first \
+  --skill-dir ./skills/review
+
+hbench setup list
+hbench setup show my-pi
 ```
 
-The default participant path needs only `hbench`, an OCI runtime, and `OPENROUTER_API_KEY`. It displays one immutable plan covering source refs, image digests, model, reasoning, the **$1 default spend cap**, timeout, and credential name; asks once; then runs and judges in sealed containers. Add `--yes` for non-interactive exact-plan approval or `--max-usd <amount>` to lower or raise the relay-enforced cap. `auto` selects Docker, Podman, or nerdctl. The initial OCI path supports stock Pi 0.84.4 with `openrouter/z-ai/glm-5.3-flash`; use `--runtime native` only for advanced compatibility with other setups.
+The profile is stored under the hbench data directory. `personal` is the
+default for `setup save`; use `--mode clean-baseline` for an isolated baseline
+recipe. A personal profile records the selected values. Adapter support still
+determines which values are enforced. Personal Codex runs snapshot
+`~/.codex/config.toml` by digest and use that frozen file inside an isolated
+`CODEX_HOME`; other global files are not copied.
 
-Operators with a registered evaluator pack use `hbench controlled run ... --runtime auto --approve-spend`. Colima and Dory Docker-compatible contexts work through the Docker CLI.
-
-After a ride:
+Run a published scenario with that setup through the native compatibility path:
 
 ```bash
-hbench report          # local HTML in ./hb-out
-hbench publish         # optional upload to agentrodeo.dev
+hbench run -s rodeo:js-commander-negative-exp-E@3 \
+  --setup my-pi --runtime native
 ```
 
-Same installer from a coding agent: see [SKILL.md](./SKILL.md).
-
-| | |
-|---|---|
-| **Status** | v0.5.9 — digest-pinned OCI participant rides |
-| **CLI** | `hbench` |
-| **License** | MIT |
-
----
-
-## Why this exists
-
-When you switch models, harnesses, skills, and projects constantly, you cannot tell what helps. Different tasks muddle the signal. Casual demos lie.
-
-Harness Benchmark **freezes the task** and varies only what you care about:
-
-| Axis | Example question |
-|------|------------------|
-| Harness | Does pi beat the Grok CLI when both use Grok 4.5? |
-| Workflow / skills | Does obra/superpowers pay for itself vs a clean baseline? |
-| Interaction | Does a stakeholder-proxy Q&A loop help on incomplete specs? |
-
-Cost (tokens, wall time, estimated USD) sits next to quality. Fancy workflows that pass the same tests for 4× the spend show up clearly.
-
----
-
-## How it works
-
-```text
-scenario × config  →  run (workspace + snapshot)
-                   →  agent (manual or hbench execute)
-                   →  patch + telemetry
-                   →  independent judges (tests / FAIL_TO_PASS)
-                   →  result record
-                   →  static HTML report (artifact deep links)
-```
-
-| Term | Meaning |
-|------|---------|
-| **Scenario** | Frozen task: repo `base_ref`, intent prompt, optional gold ref, acceptance tests |
-| **Config** | Treatment: harness@version + model + workflow + tools + budget + interaction |
-| **Run** | One scenario × config attempt (with optional repeat index) |
-| **Snapshot** | Frozen scenario+config JSON under `results/<id>/snapshot.json` for re-runs |
-| **Judge** | Offline scorer — tests outside the system under test; gold is reference, not line-match |
-| **Report** | Static HTML comparing runs; links into patches, logs, dialogue, snapshots |
-
-Design principles and contamination strategy: **[DESIGN.md](./DESIGN.md)**.  
-End-to-end walkthroughs of real experiments: **[docs/EXAMPLES.md](./docs/EXAMPLES.md)**.  
-Future work: **[WISHLIST.md](./WISHLIST.md)**.
-
----
-
-## Optional: harness CLIs + API keys
-
-Headless execute needs whatever harness you pin in a config:
-
-| Config family | Needs |
-|---------------|--------|
-| `pi-grok45-*` | [pi](https://github.com/badlogic/pi-mono) CLI, OpenRouter (or other) key for `x-ai/grok-4.5` |
-| `grok-grok45-*` | Grok Build / `grok` CLI authenticated to grok.com |
-| `pi-*-superpowers` | Vendored superpowers pin (see [vendor/README.md](./vendor/README.md)) |
-
-Manual mode needs no API keys: prepare a workspace, run any agent yourself, `hbench finish`.
-
----
-
-## 5-minute loop
-
-`hbench ride` prints one immutable input plan, asks once, executes the model only after `--approve-spend`, judges the result, and writes a local report. Hbench never publishes results unless `hbench publish` is explicitly run.
+The command prints a run ID and workspace. For a headless harness, continue
+with:
 
 ```bash
-hbench                     # one suggested command; hbench doctor for the full report
-# paste what it prints, e.g.:
-hbench ride -s rodeo:js-commander-negative-exp-E@3 --harness pi \
-  --model openrouter/z-ai/glm-5.3-flash --approve-spend
-
-# optional:
-hbench publish             # upload the latest finished run to agentrodeo.dev
-```
-
-Manual path (GUI harness, or you want to drive the agent yourself):
-
-```bash
-hbench run -s go-chi-tee-bytes-double-count --harness manual
-# stay in this directory; open the printed workspace, fix the prompt, then:
-hbench finish
+hbench execute RUN_ID
 hbench report
 ```
 
-For Pi, keep provider, model, and reasoning separate so the published setup is exact:
+For manual work, edit the printed workspace and run `hbench finish RUN_ID`.
+Use `hbench list runs` to recover IDs and next actions.
+
+`--skill-dir PATH` accepts a local Pi skill directory. hbench copies it into
+the run directory before execution and records a SHA-256 over its relative
+paths and file contents. The frozen hash is included in the publish preview.
+
+## Run the clean OCI baseline
+
+Published scenarios with digest-pinned OCI environments can run without a
+local language runtime or harness:
 
 ```bash
-command -v hbench && hbench version
-hbench run -s zip-password-finder-python-port \
-  --harness pi --provider openai --model gpt-5.6-sol --reasoning medium
+hbench ride -s rodeo:js-commander-negative-exp-E@3 \
+  --harness pi --model openrouter/z-ai/glm-5.3-flash \
+  --runtime auto --approve-spend
 ```
 
-OCI rides do not use host compilers, language runtimes, harnesses, plugins, skills, or extensions. The digest-pinned environment supplies them. Native compatibility runs still use `hbench doctor -s <scenario>` to check host prerequisites.
+`auto` selects Docker, Podman, or nerdctl. OCI rides use the sealed clean
+baseline. Use native `hbench run` for personal models, workflows, or skills.
+The default relay cap is **$1 per ride**; `--max-usd` changes that hard relay
+boundary. Model execution requires `--approve-spend`.
 
-Hbench fetches the small public scenario manifest needed to compute the plan. Before it downloads the pinned repository or lockfile-pinned dependencies, it prints one aggregate plan with the source, immutable ref or checksum, reason, destination, and expected size, then asks `Proceed? [Y/n]`. Approval is stored for that exact digest only. If any plan field changes, hbench asks again. In a non-interactive session, pass `--yes` to `hbench ride`, or approve the printed digest with `hbench fetch approve <digest>` and rerun.
+## Compare setups and share findings
 
----
-
-## Features (what works today)
-
-### Corpus
-
-- **Scenarios** — real OSS bugfixes (pytest, chi, commander.js, FastAPI stream router, …). Agents see **intent only**; `gold_ref` is judge-side.
-- **Community manifests** — `hbench run -s rodeo:<slug>@<version>` downloads a digest-verified public manifest from Agent Rodeo. Private targets and evaluators never enter the manifest.
-- **Explicit external trust** — path and pack scenarios require approval of a digest covering the full executable manifest and referenced files. Use `hbench inspect` and `hbench trust`; published and embedded scenarios stay frictionless.
-- **No surprise installation** — scenario prerequisites are checked, never installed. Repository and dependency downloads are declared and shown in one immutable approval plan before access.
-- **Configs** — baseline and treatment recipes with **pinned harness versions** and models.
-- **Experiments** — YAML matrices (`scenario_ids` × `config_ids` × repeats) under `experiments/`.
-
-### Execution
-
-- **`hbench execute`** — direct argv launch (no shell interpolation), telemetry parsing, and process-group timeout cleanup.
-- **OCI participant rides** — `hbench ride` runs digest-pinned environments with Docker, Podman, or nerdctl; native execution is an explicit compatibility option.
-- **Rooted scenario files** — environment patches and gold overlays cannot traverse or follow symlinks outside their declared roots.
-- **Controlled operator runs** — a trusted operator can validate and execute a private evaluator pack in isolated Docker containers, then upload a signed attestation. This does not run on the Rails host.
-
-### Judging & reporting
-
-- **FAIL_TO_PASS overlay** — pull regression tests from `gold_ref` when the base tree lacks them.
-- **Static HTML** — quality / cost / time / tokens winner chips; artifact links to `patch.diff`, `agent.log`, `dialogue.json`, `snapshot.json`, `judge.json`, `run.json`.
-- **Experiment reports** — `hbench report --from experiments/foo.yaml` → `reports/exp-<id>.html`.
-
-### What is intentionally *not* here yet
-
-Hosted execution is not part of v0.4. Controlled runs are started manually on a trusted Docker-capable operator machine. Ephemeral hosted runners are deferred to a later phase. See [WISHLIST.md](./WISHLIST.md) for the remaining roadmap.
-
----
-
-## CLI map
-
-| Command | Purpose |
-|---------|---------|
-| `hbench` | Print one suggested command |
-| `hbench doctor [-s <scenario>]` | Probe this machine and optionally check one scenario's prerequisites |
-| `hbench fetch show\|approve\|revoke <digest>` | Inspect or change consent for one immutable fetch plan |
-| `hbench version` | Print `hbench <ver> (go)` |
-| `hbench list scenarios` | Official corpus from the home cache |
-| `hbench list runs` | Local run IDs, statuses, setup labels, and safe next actions |
-| `hbench ride -s <id> --harness <name> --approve-spend` | Prepare, execute, judge, and report in one command |
-| `hbench run -s <id> --harness <name>` | New pending run + workspace |
-| `hbench execute [run_id]` | Headless harness, then finish/judge (spends tokens) |
-| `hbench finish [run_id]` | Capture patch, judge, save. Stay in the start directory. `--force` to re-judge. |
-| `hbench report` | Local HTML in `./hb-out/report.html` (does not upload) |
-| `hbench publish [--preview] [run_id]` | Preview or explicitly upload a privacy-filtered public result |
-| `hbench inspect -s <scenario>` | Show the complete external execution surface and trust digest |
-| `hbench trust -s <scenario>` | Remember approval for one exact external scenario digest |
-| `hbench sandbox-command ...` | Print, but do not execute, a hardened container command |
-| `hbench controlled keygen` | Create an operator signing key |
-| `hbench controlled validate ...` | Reproduce base/target behavior twice and sign validation |
-| `hbench controlled run ...` | Run the isolated agent and private evaluator, then sign and upload |
-| `hbench study validate STUDY.yaml` | Check an `hb.study.v1` contract and controlled axes |
-| `hbench study plan STUDY.yaml` | Show the matrix, confounds, run count, and post-run stop thresholds |
-| `hbench study run STUDY.yaml --approve-spend` | Run a seeded, sequential, resumable study |
-| `hbench study status STUDY.yaml` | Show completed cells and run IDs |
-| `hbench study publish STUDY.yaml` | Publish complete runs and the immutable Study |
-| `hbench callout create STUDY.yaml --statement "..."` | Publish a testable claim with a frozen contract |
-| `hbench callout challenge URL` | Download and verify a Callout contract |
-| `hbench skill install --target <skill-root>` | Explicitly install the natural-language study skill into one chosen root |
-
-Rider credentials are stored per HTTPS origin. Plain HTTP is rejected except for loopback development when `HB_ALLOW_INSECURE_LOCALHOST=1` is explicitly set, and authenticated publish requests never follow redirects.
+Create a study from saved setup profiles:
 
 ```bash
-hbench
-hbench version
-hbench list scenarios
+hbench study init \
+  --question "Does the review skill improve pass rate?" \
+  --scenario rodeo:js-commander-negative-exp-E@3 \
+  --setup clean-pi --setup review-pi \
+  --visibility private \
+  --out review-study.yaml
+
+hbench study validate review-study.yaml
+hbench study plan review-study.yaml
+hbench study run review-study.yaml --approve-spend
+hbench study report review-study.yaml
 ```
 
-## Controlled Arena operator workflow
+Personal or local-skill Studies must use `--visibility private`; they can be
+run and reported locally but cannot be uploaded as public Study contracts.
+Public Studies use clean, publishable setup arms. Studies freeze the question, scenarios, arms, changed axes, repeats, seed,
+judge protocol, and budgets. Study execution is local, sequential, resumable,
+and costs model tokens. A Study dollar threshold is checked after each run and
+can overshoot by one run; it is a post-run stop threshold. The OCI `--max-usd`
+value is a relay-enforced hard cap for each request.
 
-Controlled runs are an operator feature, not a command for scenario contributors and not a workload for the Agent Rodeo Rails server. The public site accepts a proposal and publishes verified attestations; a separate trusted machine performs the untrusted execution.
+Review the generated report before sharing it:
 
 ```bash
-# Once per operator machine; register the printed public key in Agent Rodeo.
-hbench controlled keygen
-
-# Validate a Candidate against the private target and evaluator twice.
-hbench controlled validate \
-  --scenario rodeo:example@1 \
-  --pack ../agentrodeo-evaluators/example/v1 \
-  --key-id <registered-key-id>
-
-# After promotion, execute and upload an official signed result.
-export OPENAI_API_KEY=... # remains in the credential-relay container
-hbench controlled run \
-  --scenario rodeo:example@1 \
-  --pack ../agentrodeo-evaluators/example/v1 \
-  --key-id <registered-key-id> \
-  --relay-image docker.io/claytonlz/agent-rodeo-model-relay@sha256:bcb8fa0938bc93d1c029d21978b7e8339ed24adf179109d5a79f48a5a6958dfa
+hbench publish --preview RUN_ID
+hbench publish RUN_ID
 ```
 
-Controlled protocol v3 requires dependency-complete pinned images. Setup and evaluator containers have networking disabled. The agent can reach only an authenticated credential relay on an internal network; the relay alone has a dedicated egress network, and the real provider secret is mounted from a mode-0600 temporary file. The signed upload contains the patch, public judge report, digests, and telemetry; raw agent logs remain private on the operator machine and should be removed after 90 days.
+Publishing is explicit. Open Range runs are community evidence and do not
+change the official Rodeo Rating. A Callout or Study publication freezes the
+contract so other riders can reproduce it.
 
-Evaluator packs must pin both the execution image and relay image by immutable digest. Never commit provider credentials, runner private keys, or private target SHAs to the public benchmark repository.
+## Contribute a scenario
 
----
+Choose one small task with a clear prompt and an executable acceptance test.
+Use a public GitHub repository with immutable base and target commits, or use a
+scaffold scenario when the task starts from authored files.
 
-## Experiments in this repo
-
-Pre-built matrices under `experiments/`:
-
-| File | Question |
-|------|----------|
-| `harness-pi-vs-grok-model45.yaml` | Same model (Grok 4.5), different harness (pi vs Grok CLI) |
-| `skills-superpowers-vs-baseline.yaml` | Superpowers ON vs OFF (easy scenarios) |
-| `skills-superpowers-hard.yaml` | Same on a harder FastAPI multi-file bug |
-| `skills-superpowers-proxy-incomplete.yaml` | Incomplete prompt + stakeholder proxy |
-
-Walkthroughs and directional findings: **[docs/EXAMPLES.md](./docs/EXAMPLES.md)**. The supported CLI is the Go `hbench` binary; legacy Python CLI sources were removed in v0.4.1.
-
----
-
-## Authoring
-
-### Scenario (YAML)
-
-```yaml
-id: my-bugfix
-type: bugfix
-title: Short title
-description: What success looks like
-prompt: |
-  Human intent only. Never paste the gold patch.
-repo:
-  url: https://github.com/org/repo.git
-  base_ref: <sha-before-fix>
-  gold_ref: <sha-with-fix>   # optional; judge-only
-acceptance:
-  setup_commands: [...]
-  test_commands: [...]
-  fail_to_pass: [path/or/node/id]   # tests that fail at base, pass after fix
-contamination_risk: medium
-```
-
-Rules: [scenarios/README.md](./scenarios/README.md), shortlist notes: [scenarios/SHORTLIST.md](./scenarios/SHORTLIST.md).
-
-### Config (YAML)
-
-```yaml
-id: pi-grok45-baseline
-name: pi · Grok 4.5 · baseline
-harness: pi
-harness_version: "0.84.1"
-model: grok-4.5
-workflow: baseline
-interaction: unattended
-budget:
-  max_minutes: 45
-  max_turns: 80
-  max_usd: 2.0          # optional hard $ cap
-harness_options:
-  launch_headless: >-
-    pi -p --mode json --provider openrouter --model x-ai/grok-4.5 ...
-```
-
-### Experiment (YAML)
-
-```yaml
-id: my-ab
-name: "A/B title"
-hypothesis: >
-  What you expect and why.
-scenario_ids: [js-commander-negative-exp-E]
-config_ids: [pi-grok45-baseline, pi-grok45-superpowers]
-repeats: 1
-```
-
----
-
-## Budget guards
-
-Configs declare `budget:`. `hbench execute` enforces non-null fields:
-
-| Limit | Behavior |
-|-------|----------|
-| `max_minutes` | Caps wall clock; clamps CLI `--timeout` |
-| `max_usd` | Polls agent JSON usage; kills process group when over |
-| `max_turns` / `max_tokens` | Same mid-run kill |
-| ~80% of any limit | Soft warn only |
-
-Exceeded runs still get judged and are marked `budget_exceeded`.
-
----
-
-## Interaction modes (stakeholder Q&A)
-
-| Mode | Config | Behavior |
-|------|--------|----------|
-| `unattended` | default | No Q&A; implement from prompt |
-| `proxy` | `interaction: proxy` + `stakeholder:` | Answers `STAKEHOLDER_QUESTION` from `scenario.stakeholder_brief` (cheap model) |
-| `human` | `interaction: human` | Pauses for stdin / answer file |
-
-```text
-STAKEHOLDER_QUESTION:
-What should the error message say?
-STAKEHOLDER_END
-```
-
-Dialogue → `results/<run_id>/dialogue.json`. Proxy $ is tracked separately from SUT cost.
-
----
-
-## Reports & artifacts
+Validate a local manifest before asking the community site to review it:
 
 ```bash
-hbench report          # ./hb-out/report.html — local only, nothing uploaded
+go test -mod=mod ./internal/corpus
+hbench scenario validate ./scenarios/my-task.yaml
+hbench run -s ./path/to/scenario.yaml --harness manual
 ```
 
-Run records live under `./hb-out/<run_id>/` (`run.json`, `patch.diff`, `snapshot.json`, …). Official YAML is cached in the home data dir. Older `results/` and `reports/` trees in this repo are leftover personal experiment output.
+The first command checks the authoring helpers. The second exercises the
+scenario through the same trust, fetch, workspace, and judge path used for a
+ride. Do not put the target commit or hidden evaluator in the agent prompt.
+Scenario versions are immutable: change the version when environment or
+dependency metadata changes.
 
----
+Submit the proposal through Agent Rodeo's Community Scenarios page. The site
+checks repository access, commit ancestry, the manifest, and the public
+execution surface. A proposal is not an official rating result until a trusted
+Controlled run validates it.
 
-## Repo layout
+## What is tested
 
-```text
-cmd/hb/          Go CLI entry (this is `hb`)
-internal/        doctor, corpus, run/execute/judge, report, publish
-install.sh       One-line installer (release binary, else go build)
-SKILL.md         Same installer for coding agents
-scenarios/       Official task definitions (also embedded in the binary)
-configs/         Older treatment recipes (YAML)
-experiments/     Older matrix definitions (YAML)
-hb/              Leftover Python package — not the user-facing CLI
-tests/           Leftover Python unit tests
-docs/            Examples and guides
-DESIGN.md        Architecture & principles
-WISHLIST.md      Future ideas
-```
+There are two different test layers:
 
----
+* **Benchmark acceptance tests** belong to each scenario. hbench runs them
+  after the agent changes the workspace; they judge the agent's patch.
+* **Repository tests** check hbench itself. Run focused Go tests under
+  `harness-benchmark`, and focused Rails tests under `agentrodeo` when changing
+  the web application. They do not measure an agent setup.
 
-## Development
+Useful local checks are:
 
 ```bash
 go test -mod=mod ./cmd/... ./internal/...
-go build -mod=mod -o hb ./cmd/hb
+(cd ../agentrodeo && bundle exec rspec)
 ```
 
-The Python tree is not required to install or run `hb`.
+The Rails command is only for the `agentrodeo` directory. Tests that fetch
+external repositories or contact a model provider need the relevant network
+and credential access.
 
----
+## Command reference
 
-## Principles (short)
+```text
+hbench doctor [-s SCENARIO]
+hbench setup save ID [flags]
+hbench setup list
+hbench setup show ID
+hbench scenario new|validate [flags]
+hbench run -s SCENARIO [--setup ID | --harness NAME] [flags]
+hbench ride -s SCENARIO --harness pi --model MODEL --approve-spend
+hbench execute [RUN_ID]
+hbench finish [RUN_ID]
+hbench report
+hbench publish [--preview] [RUN_ID]
+hbench study init|validate|plan|run|status|report|publish STUDY.yaml
+hbench inspect -s SCENARIO
+hbench trust -s SCENARIO
+hbench skill install --target DIR
+```
 
-1. **Lock non-variables** — test one axis at a time when possible.
-2. **Always baseline** — minimal workflow control for every claim.
-3. **Pin harness version**, not just family (`pi@0.84.1`, not “pi”).
-4. **Prompt is intent** — agents never see the gold patch.
-5. **Gold is reference** — correctness via tests/behavior, not line match.
-6. **Independent judges** — scoring outside the system under test.
-7. **Cost is first-class** — tokens, time, $ next to quality.
-8. **Repeats for variance** — N≥2–3 before strong workflow claims.
-
----
-
-## Status
-
-**v0.4 is the Go CLI (`hbench`).** Install with the one-liner, run `hbench`, paste the suggested command. Community site: [agentrodeo.dev](https://agentrodeo.dev) — `hbench publish` after a local ride.
-
-Not SWE-bench-scale. Directional signal first.
-
----
-
-## License
-
-MIT — see [LICENSE](./LICENSE).
+See [docs/EXAMPLES.md](docs/EXAMPLES.md) for runnable recipes, [the study
+guide](docs/STUDIES_AND_CALLOUTS.md) for contract details, and
+[scenarios/README.md](scenarios/README.md) for authoring rules.

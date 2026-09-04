@@ -1,0 +1,21 @@
+id: original-scaffold
+type: feature
+title: "Original scaffold: compute the answer"
+description: "An evaluator-owned answer is added to the private target workspace."
+language: text
+difficulty: easy
+workspace:
+  kind: scaffold
+  files:
+    README.md: |
+      Implement the task described in HB_PROMPT.txt.
+
+prompt: |
+  Add the requested behavior to this original scaffold.
+  Keep the change small and make the evaluator pass.
+
+acceptance:
+  setup_commands: []
+  test_commands: []
+  build_commands: []
+  fail_to_pass: []

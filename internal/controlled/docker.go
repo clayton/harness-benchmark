@@ -22,6 +22,9 @@ type ValidationResult struct {
 }
 
 func Validate(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath string) (ValidationResult, error) {
+	if err := pack.ValidateForScenario(scenario); err != nil {
+		return ValidationResult{}, err
+	}
 	rt, err := SelectRuntime(os.Getenv("HB_RUNTIME"))
 	if err != nil {
 		return ValidationResult{}, err
@@ -38,7 +41,13 @@ func Validate(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath
 			return result, fmt.Errorf("base attempt %d: %w", attempt, err)
 		}
 
-		targetDir, cleanupTarget, err := checkout(ctx, scenario.Repo.URL, pack.TargetRef)
+		var targetDir string
+		var cleanupTarget func()
+		if len(pack.TargetWorkspace) > 0 {
+			targetDir, cleanupTarget, err = checkoutWorkspace(ctx, pack.TargetWorkspace, "hbench-controlled-target-")
+		} else {
+			targetDir, cleanupTarget, err = checkout(ctx, scenario.Repo.URL, pack.TargetRef)
+		}
 		if err != nil {
 			return result, err
 		}
@@ -60,6 +69,38 @@ func Validate(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath
 		return result, fmt.Errorf("evaluator did not reproduce twice: base_failures=%d target_passes=%d", result.BaseFailures, result.TargetPasses)
 	}
 	return result, nil
+}
+
+func checkoutWorkspace(ctx context.Context, files map[string]string, prefix string) (string, func(), error) {
+	dir, err := os.MkdirTemp("", prefix)
+	if err != nil {
+		return "", func() {}, err
+	}
+	cleanup := func() { _ = os.RemoveAll(dir) }
+	paths, err := corpus.ScaffoldPaths(files)
+	if err != nil {
+		cleanup()
+		return "", func() {}, err
+	}
+	for _, clean := range paths {
+		path := filepath.Join(dir, clean)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			cleanup()
+			return "", func() {}, err
+		}
+		if err := os.WriteFile(path, []byte(files[clean]), 0o644); err != nil {
+			cleanup()
+			return "", func() {}, err
+		}
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"config", "user.email", "hbench@local"}, {"config", "user.name", "hbench"}, {"config", "commit.gpgsign", "false"}, {"add", "-A"}, {"commit", "-qm", "hbench private target"}} {
+		command := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			cleanup()
+			return "", func() {}, fmt.Errorf("git private target: %w: %s", err, output)
+		}
+	}
+	return dir, cleanup, nil
 }
 
 func checkoutScenarioBase(ctx context.Context, scenario corpus.Scenario) (string, func(), error) {

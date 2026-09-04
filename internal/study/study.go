@@ -22,6 +22,8 @@ type Manifest struct {
 	Schema         string     `yaml:"schema" json:"schema"`
 	ID             string     `yaml:"id" json:"id"`
 	Question       string     `yaml:"question" json:"question"`
+	Visibility     string     `yaml:"visibility,omitempty" json:"visibility,omitempty"`
+	Private        bool       `yaml:"private,omitempty" json:"private,omitempty"`
 	Sources        []Source   `yaml:"sources,omitempty" json:"sources,omitempty"`
 	ComparisonMode string     `yaml:"comparison_mode" json:"comparison_mode"`
 	Scenarios      []Scenario `yaml:"scenarios" json:"scenarios"`
@@ -50,23 +52,28 @@ type Budget struct {
 	MaxMinutes   int      `yaml:"max_minutes_per_run" json:"max_minutes_per_run"`
 }
 type Arm struct {
-	ID          string   `yaml:"id" json:"id"`
-	Harness     string   `yaml:"harness" json:"harness"`
-	Version     string   `yaml:"harness_version,omitempty" json:"harness_version,omitempty"`
-	Provider    string   `yaml:"provider,omitempty" json:"provider,omitempty"`
-	Model       string   `yaml:"model" json:"model"`
-	Reasoning   string   `yaml:"reasoning,omitempty" json:"reasoning,omitempty"`
-	Workflow    string   `yaml:"workflow,omitempty" json:"workflow,omitempty"`
-	Skills      []string `yaml:"skills,omitempty" json:"skills,omitempty"`
-	Extensions  []string `yaml:"extensions,omitempty" json:"extensions,omitempty"`
-	Plugins     []string `yaml:"plugins,omitempty" json:"plugins,omitempty"`
-	Tools       []string `yaml:"tools,omitempty" json:"tools,omitempty"`
-	Subagents   string   `yaml:"subagent_topology,omitempty" json:"subagent_topology,omitempty"`
-	Environment string   `yaml:"environment,omitempty" json:"environment,omitempty"`
-	Network     string   `yaml:"network,omitempty" json:"network,omitempty"`
+	ID                string   `yaml:"id" json:"id"`
+	Mode              string   `yaml:"mode,omitempty" json:"mode,omitempty"`
+	LocalSkills       []string `yaml:"local_skill_dirs,omitempty" json:"local_skill_dirs,omitempty"`
+	LocalSkillDigests []string `yaml:"local_skill_digests,omitempty" json:"local_skill_digests,omitempty"`
+	ConfigDigest      string   `yaml:"config_sha256,omitempty" json:"config_sha256,omitempty"`
+	ConfigStatus      string   `yaml:"config_status,omitempty" json:"config_status,omitempty"`
+	Harness           string   `yaml:"harness" json:"harness"`
+	Version           string   `yaml:"harness_version,omitempty" json:"harness_version,omitempty"`
+	Provider          string   `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Model             string   `yaml:"model" json:"model"`
+	Reasoning         string   `yaml:"reasoning,omitempty" json:"reasoning,omitempty"`
+	Workflow          string   `yaml:"workflow,omitempty" json:"workflow,omitempty"`
+	Skills            []string `yaml:"skills,omitempty" json:"skills,omitempty"`
+	Extensions        []string `yaml:"extensions,omitempty" json:"extensions,omitempty"`
+	Plugins           []string `yaml:"plugins,omitempty" json:"plugins,omitempty"`
+	Tools             []string `yaml:"tools,omitempty" json:"tools,omitempty"`
+	Subagents         string   `yaml:"subagent_topology,omitempty" json:"subagent_topology,omitempty"`
+	Environment       string   `yaml:"environment,omitempty" json:"environment,omitempty"`
+	Network           string   `yaml:"network,omitempty" json:"network,omitempty"`
 }
 
-var axes = []string{"harness", "harness_version", "provider", "model", "reasoning", "workflow", "skills", "extensions", "plugins", "tools", "subagent_topology", "environment", "network"}
+var axes = []string{"harness", "harness_version", "provider", "model", "mode", "config", "reasoning", "workflow", "skills", "extensions", "plugins", "tools", "subagent_topology", "environment", "network"}
 var publishedScenarioID = regexp.MustCompile(`^rodeo:[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*@[1-9][0-9]*$`)
 
 func Load(path string) (Manifest, error) {
@@ -121,11 +128,14 @@ func (m Manifest) Validate() error {
 	}
 	seen := map[string]bool{}
 	scenarioSeen := map[string]bool{}
+	if m.Visibility != "" && m.Visibility != "public" && m.Visibility != "private" {
+		return fmt.Errorf("visibility must be public or private")
+	}
 	for _, scenario := range m.Scenarios {
-		if scenario.ID == "" || scenarioSeen[scenario.ID] {
+		if scenario.ID == "" || len(scenario.ID) > 200 || scenarioSeen[scenario.ID] {
 			return fmt.Errorf("scenario ids must be present and unique")
 		}
-		if !publishedScenarioID.MatchString(scenario.ID) {
+		if !m.IsPrivate() && !publishedScenarioID.MatchString(scenario.ID) {
 			return fmt.Errorf("scenario %q is not publishable; studies require rodeo:slug@version IDs", scenario.ID)
 		}
 		if len(scenario.Digest) != 64 {
@@ -137,6 +147,46 @@ func (m Manifest) Validate() error {
 		scenarioSeen[scenario.ID] = true
 	}
 	for _, a := range m.Arms {
+		if (a.Mode != "" || len(a.LocalSkills) > 0 || len(a.LocalSkillDigests) > 0 || a.ConfigDigest != "" || a.ConfigStatus != "") && !m.IsPrivate() {
+			return fmt.Errorf("arm %q personal setup fields are only allowed in private studies", a.ID)
+		}
+		if a.ConfigStatus != "" && a.ConfigStatus != "missing" && a.ConfigStatus != "captured" {
+			return fmt.Errorf("arm %q has invalid config status", a.ID)
+		}
+		if a.ConfigStatus == "captured" && len(a.ConfigDigest) != 64 {
+			return fmt.Errorf("arm %q captured config needs a 64-character digest", a.ID)
+		}
+		if (a.ConfigDigest != "" || a.ConfigStatus != "") && !(a.Mode == "personal" && a.Harness == "codex") {
+			return fmt.Errorf("arm %q config fingerprint is only supported for personal codex setups", a.ID)
+		}
+		if a.ConfigStatus == "missing" && a.ConfigDigest != "" {
+			return fmt.Errorf("arm %q missing config cannot have a digest", a.ID)
+		}
+		if a.ConfigDigest != "" {
+			if len(a.ConfigDigest) != 64 {
+				return fmt.Errorf("arm %q has an invalid config digest", a.ID)
+			}
+			if _, err := hex.DecodeString(a.ConfigDigest); err != nil {
+				return fmt.Errorf("arm %q has an invalid config digest", a.ID)
+			}
+		}
+		if a.Mode == "personal" && a.Harness == "codex" && a.ConfigStatus == "" {
+			return fmt.Errorf("arm %q personal codex setup needs a config fingerprint", a.ID)
+		}
+		if len(a.LocalSkills) != len(a.LocalSkillDigests) {
+			return fmt.Errorf("arm %q local skill paths and digests must match", a.ID)
+		}
+		if len(a.LocalSkills) > 0 && a.Mode != "personal" {
+			return fmt.Errorf("arm %q local skills require personal mode", a.ID)
+		}
+		for _, digest := range a.LocalSkillDigests {
+			if len(digest) != 64 {
+				return fmt.Errorf("arm %q has an invalid local skill digest", a.ID)
+			}
+			if _, err := hex.DecodeString(digest); err != nil {
+				return fmt.Errorf("arm %q has an invalid local skill digest", a.ID)
+			}
+		}
 		if a.ID == "" || a.Harness == "" || a.Version == "" || a.Model == "" {
 			return fmt.Errorf("every arm needs id, harness, harness_version, and model")
 		}
@@ -171,6 +221,11 @@ func (m Manifest) Validate() error {
 	return nil
 }
 
+// IsPrivate reports whether this contract intentionally contains local or
+// otherwise non-public evidence. Private studies can be run and reported
+// locally, but must never be sent to the public Study endpoint.
+func (m Manifest) IsPrivate() bool { return m.Private || m.Visibility == "private" }
+
 func containsAxis(want string) bool {
 	for _, axis := range axes {
 		if axis == want {
@@ -203,11 +258,19 @@ func armValues(a Arm) map[string]string {
 		sort.Strings(c)
 		return strings.Join(c, "\x00")
 	}
-	return map[string]string{"harness": a.Harness, "harness_version": a.Version, "provider": a.Provider, "model": a.Model, "reasoning": a.Reasoning, "workflow": a.Workflow, "skills": join(a.Skills), "extensions": join(a.Extensions), "plugins": join(a.Plugins), "tools": join(a.Tools), "subagent_topology": a.Subagents, "environment": a.Environment, "network": a.Network}
+	skills := append(append([]string(nil), a.Skills...), a.LocalSkillDigests...)
+	return map[string]string{"harness": a.Harness, "harness_version": a.Version, "provider": a.Provider, "model": a.Model, "mode": a.Mode, "config": a.ConfigStatus + "\x00" + a.ConfigDigest, "reasoning": a.Reasoning, "workflow": a.Workflow, "skills": join(skills), "extensions": join(a.Extensions), "plugins": join(a.Plugins), "tools": join(a.Tools), "subagent_topology": a.Subagents, "environment": a.Environment, "network": a.Network}
 }
 
 func (m Manifest) Digest() string {
-	structured, _ := json.Marshal(m)
+	copy := m
+	copy.Arms = append([]Arm(nil), m.Arms...)
+	for i := range copy.Arms {
+		// Source paths are operational inputs, not study identity. Content
+		// digests remain in the contract and therefore freeze the arm.
+		copy.Arms[i].LocalSkills = nil
+	}
+	structured, _ := json.Marshal(copy)
 	var canonical map[string]any
 	_ = json.Unmarshal(structured, &canonical)
 	var buffer bytes.Buffer

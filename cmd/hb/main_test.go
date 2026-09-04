@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -141,6 +142,63 @@ func TestRunHelpExitsZero(t *testing.T) {
 	out := capture(t, []string{"run", "--help"})
 	if !strings.Contains(out, "hbench run -s") {
 		t.Fatalf("run help:\n%s", out)
+	}
+}
+
+func TestManualRunDefaultsToPersonalMode(t *testing.T) {
+	root := t.TempDir()
+	data := filepath.Join(root, "data")
+	t.Setenv("HB_DATA_DIR", data)
+	t.Setenv("HB_OUT_DIR", filepath.Join(root, "out"))
+	cwd := filepath.Join(root, "cwd")
+	if err := os.MkdirAll(filepath.Join(data, "scenarios"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := []byte(`id: manual-direct
+title: Manual direct run
+type: bugfix
+language: text
+prompt: Edit README.md
+workspace:
+  kind: scaffold
+  files:
+    README.md: hello
+`)
+	if err := os.WriteFile(filepath.Join(data, "scenarios", "manual-direct.yaml"), manifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(cwd); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(filepath.Dir(cwd)) })
+	out, err := captureResult(t, []string{"run", "-s", "manual-direct", "--harness", "manual"})
+	if err != nil {
+		t.Fatalf("manual direct run failed: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "hbench finish") {
+		t.Fatalf("manual next action missing:\n%s", out)
+	}
+	run, err := loop.LatestRecord(layout())
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(layout().RunDir(run.ID), "snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot struct {
+		Config struct {
+			Mode string `json:"mode"`
+		} `json:"config"`
+	}
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Config.Mode != "personal" {
+		t.Fatalf("manual snapshot mode=%q", snapshot.Config.Mode)
 	}
 }
 

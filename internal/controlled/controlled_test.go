@@ -43,6 +43,31 @@ func TestMinimumRequestUSDIncludesInputAndOutputBounds(t *testing.T) {
 	}
 }
 
+func TestPrivateTargetWorkspaceMakesBaseFailAndTargetPass(t *testing.T) {
+	scenario := corpus.Scenario{Workspace: corpus.Workspace{Kind: "scaffold", Files: map[string]string{"README.md": "start\n"}}}
+	base, cleanupBase, err := checkoutScenarioBaseAt(context.Background(), scenario, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupBase()
+	target, cleanupTarget, err := checkoutWorkspace(context.Background(), map[string]string{"README.md": "start\n", "answer.txt": "42\n"}, "hbench-test-target-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanupTarget()
+	check := func(dir string) error {
+		command := exec.Command("sh", "-c", "test -f answer.txt && test \"$(tr -d '\\r\\n' < answer.txt)\" = 42")
+		command.Dir = dir
+		return command.Run()
+	}
+	if err := check(base); err == nil {
+		t.Fatal("private evaluator unexpectedly passed on scaffold base")
+	}
+	if err := check(target); err != nil {
+		t.Fatalf("private target did not pass evaluator: %v", err)
+	}
+}
+
 func TestRunRejectsUnpinnedRelayBeforeCredentials(t *testing.T) {
 	runtimeDir := t.TempDir()
 	runtimePath := filepath.Join(runtimeDir, "podman")
@@ -50,14 +75,14 @@ func TestRunRejectsUnpinnedRelayBeforeCredentials(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", runtimeDir)
-	_, err := Run(context.Background(), corpus.Scenario{}, Pack{}, "", "relay:latest", t.TempDir(), "")
+	_, err := Run(context.Background(), corpus.Scenario{}, Pack{TargetRef: strings.Repeat("b", 40)}, "", "relay:latest", t.TempDir(), "")
 	if err == nil || !strings.Contains(err.Error(), "relay image must be pinned") {
 		t.Fatalf("err=%v", err)
 	}
 
 	relay := "example/relay@sha256:" + strings.Repeat("e", 64)
 	other := "example/relay@sha256:" + strings.Repeat("f", 64)
-	_, err = Run(context.Background(), corpus.Scenario{RelayImageDigest: other}, Pack{RelayImageDigest: relay}, "", relay, t.TempDir(), "")
+	_, err = Run(context.Background(), corpus.Scenario{RelayImageDigest: other}, Pack{TargetRef: strings.Repeat("b", 40), RelayImageDigest: relay}, "", relay, t.TempDir(), "")
 	if err == nil || !strings.Contains(err.Error(), "match the evaluator pack and scenario") {
 		t.Fatalf("err=%v", err)
 	}
@@ -101,6 +126,34 @@ evaluator_commands: ["test -f /evaluator/hidden.txt"]
 	signature, _ := base64.StdEncoding.DecodeString(envelope.Signature)
 	if !ed25519.Verify(public, payload, signature) {
 		t.Fatal("signature did not verify")
+	}
+}
+
+func TestPackRequiresExactlyOnePrivateTarget(t *testing.T) {
+	dir := t.TempDir()
+	packYAML := `schema: rodeo.evaluator.v1
+scenario_slug: safe-task
+scenario_version: 1
+target_ref: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+target_workspace:
+  answer.txt: "42"
+environment_image_digest: example/image@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+relay_image_digest: example/relay@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+protocol_id: controlled-v3
+evaluator_commands: ["true"]
+`
+	if err := os.WriteFile(filepath.Join(dir, "pack.yaml"), []byte(packYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadPack(dir); err == nil {
+		t.Fatal("accepted both target_ref and target_workspace")
+	}
+	pack := Pack{TargetWorkspace: map[string]string{"answer.txt": "42"}}
+	if err := pack.ValidateForScenario(corpus.Scenario{Repo: corpus.Repo{URL: "https://github.com/example/task"}}); err == nil {
+		t.Fatal("accepted private target workspace for repository scenario")
+	}
+	if err := pack.ValidateForScenario(corpus.Scenario{Workspace: corpus.Workspace{Kind: "scaffold"}}); err != nil {
+		t.Fatal(err)
 	}
 }
 

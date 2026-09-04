@@ -1,33 +1,63 @@
-# Adapters
+# Harness adapters
 
-Adapters bridge **Harness Benchmark** to a specific coding harness (Grok, Claude
-Code, Codex, Cursor, …).
+Adapters connect `hbench` to a coding-agent CLI. The Go runner prepares the
+workspace, launches a harness with an argument vector, captures its log, and
+parses telemetry. It does not construct shell command strings.
 
-## Interface (target)
+## Running an adapter
 
-```text
-prepare(scenario) -> worktree
-run(config, prompt, worktree, budget) -> stream events
-finalize() -> patch + telemetry
+Create a pending run with either a saved setup or explicit flags:
+
+```bash
+hbench run -s rodeo:scenario@version --setup my-pi --runtime native
+hbench execute RUN_ID
 ```
 
-## v0 approach
+`hbench execute` runs the selected headless harness in the printed workspace,
+then `hbench finish` overlays gold tests and judges the patch. Manual runs skip
+`execute`: edit the workspace and call `hbench finish RUN_ID`.
 
-Most “adapters” today are **config launch strings**, not Python plugins:
+## Adapter contract
 
-1. `hbench run -s … -c …` prepares a workspace + snapshot
-2. `hbench execute <run_id>` shells out to `harness_options.launch_headless`
-3. Telemetry is parsed from agent logs (pi JSONL, grok JSON today)
-4. Or: run any agent yourself and `hbench finish` / `hbench ingest`
+An adapter must make the measured setup explicit and keep unsupported claims
+visible. At minimum it needs:
 
-Prefer thin wrappers around each harness CLI rather than re-implementing agent loops.
+1. a stable harness name and detected version;
+2. a direct `argv` launch with the prompt passed as data;
+3. isolated credentials and environment handling;
+4. timeout and process-group cleanup;
+5. telemetry extraction that marks incomplete fields as incomplete;
+6. a clear error when a requested setup axis cannot be enforced.
 
-## Status
+The run snapshot records the selected model, reasoning, workflow, skills, and
+mode. A `personal` profile may contain descriptive values that a harness cannot
+lock; the result must not present those values as enforced controls.
 
-| Path | Status |
-|------|--------|
-| Manual (`hbench finish` / `hbench ingest`) | Supported |
-| pi via `launch_headless` | Supported (JSON telemetry) |
-| Grok CLI via `launch_headless` | Supported (JSON telemetry) |
-| Claude Code / Codex / Cursor | Config sketches only — wire launch strings + parsers |
-| Formal adapter package API | Wishlist (see [WISHLIST.md](../WISHLIST.md)) |
+## Current paths
+
+| Harness | Path | Notes |
+|---|---|---|
+| Manual | `hbench finish` | Any local agent or human can edit the workspace. |
+| Pi | `hbench execute` | Headless JSON output; explicit model, reasoning, and skill paths. |
+| Grok | `hbench execute` | Headless JSON output; baseline launch support. |
+| Claude Code | `hbench execute` | Headless launch support; unsupported setup axes are rejected for clean studies. |
+| Codex | `hbench execute` | Isolated `CODEX_HOME`; personal mode uses a frozen `~/.codex/config.toml` snapshot. |
+| Cursor | `hbench execute` | Headless launch support; unsupported setup axes are rejected for clean studies. |
+
+Local skill directories currently work through Pi's repeatable `--skill-dir`
+flag. hbench copies each directory into the run artifact and records its
+content hash before execution. Package resources remain subject to the
+harness's installed package layout.
+
+## Adding an adapter
+
+Keep the change small:
+
+1. add the launch and version detection in `internal/loop`;
+2. define which profile fields the adapter enforces;
+3. add telemetry fixtures for success, failure, timeout, and missing usage;
+4. add a help example and a focused integration test;
+5. run `go test -mod=mod ./internal/loop ./cmd/hb`.
+
+Do not add host package installation to OCI scenarios. Do not publish a result
+until the adapter's snapshot and telemetry are reviewable.

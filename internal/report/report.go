@@ -9,20 +9,29 @@ import (
 
 	"github.com/clayton/harness-benchmark/internal/loop"
 	"github.com/clayton/harness-benchmark/internal/paths"
+	studycontract "github.com/clayton/harness-benchmark/internal/study"
 )
 
-func Write(l paths.Layout) (string, int, error) { return write(l, "", nil) }
+func Write(l paths.Layout) (string, int, error) { return write(l, "", nil, nil, "") }
 
 func WriteStudyRuns(l paths.Layout, studyID string, runIDs map[string]bool) (string, int, error) {
-	return write(l, studyID, runIDs)
+	return write(l, studyID, runIDs, nil, "")
 }
 
-func write(l paths.Layout, studyID string, runIDs map[string]bool) (string, int, error) {
+// WriteStudyComparison writes the local report for a frozen contract. It
+// includes per-arm repeat/cost completeness and a reproducible run command;
+// it never uploads runs or the contract.
+func WriteStudyComparison(l paths.Layout, m studycontract.Manifest, runIDs map[string]bool, manifestPath string) (string, int, error) {
+	return write(l, m.ID, runIDs, &m, manifestPath)
+}
+
+func write(l paths.Layout, studyID string, runIDs map[string]bool, manifest *studycontract.Manifest, manifestPath string) (string, int, error) {
 	entries, err := os.ReadDir(l.OutDir)
 	if err != nil {
 		return "", 0, err
 	}
 	var cards []string
+	var studyRuns []loop.RunRecord
 	n := 0
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -43,8 +52,13 @@ func write(l paths.Layout, studyID string, runIDs map[string]bool) (string, int,
 		}
 		n++
 		cards = append(cards, renderRun(r))
+		studyRuns = append(studyRuns, r)
 	}
 	body := strings.Join(cards, "\n")
+	summary := ""
+	if manifest != nil {
+		summary = renderStudySummary(*manifest, studyRuns, manifestPath)
+	}
 	page := fmt.Sprintf(`<!doctype html>
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
@@ -65,17 +79,81 @@ func write(l paths.Layout, studyID string, runIDs map[string]bool) (string, int,
 <p class="muted">%d run(s) in hb-out%s. Nothing was uploaded.</p>
 %s
 <p class="muted">Optional: <code>hbench publish</code> uploads a finished run. It is not automatic.</p>
+%s
 `, n, func() string {
 		if studyID == "" {
 			return ""
 		}
 		return " for study " + html.EscapeString(studyID)
-	}(), body)
+	}(), body, summary)
 	if err := os.MkdirAll(l.OutDir, 0o755); err != nil {
 		return "", n, err
 	}
 	path := l.ReportFile()
 	return path, n, loop.WriteFileAtomic(path, []byte(page), 0o600)
+}
+
+func renderStudySummary(m studycontract.Manifest, runs []loop.RunRecord, manifestPath string) string {
+	type armStats struct {
+		id                    string
+		runs, repeats, passed int
+		cost                  float64
+		costKnown             bool
+	}
+	stats := make(map[string]*armStats, len(m.Arms))
+	for _, arm := range m.Arms {
+		stats[arm.ID] = &armStats{id: arm.ID}
+	}
+	for _, r := range runs {
+		armID := ""
+		if profile, ok := r.Metadata["profile"].(map[string]any); ok {
+			armID, _ = profile["arm_id"].(string)
+		}
+		if armID == "" {
+			armID = r.ConfigID
+		}
+		s := stats[armID]
+		if s == nil {
+			s = &armStats{id: armID}
+			stats[armID] = s
+		}
+		s.runs++
+		if r.Judges != nil {
+			s.repeats++
+		}
+		for _, judge := range r.Judges {
+			if judge.Passed != nil && *judge.Passed {
+				s.passed++
+				break
+			}
+		}
+		if r.Telemetry.EstimatedUSD == nil || r.Telemetry.Complete == nil || !*r.Telemetry.Complete ||
+			(r.Telemetry.CostKind != "actual" && r.Telemetry.CostKind != "estimated") ||
+			(r.Telemetry.CostKind == "estimated" && r.Telemetry.PriceSnapshot == "") {
+			s.costKnown = false
+		} else {
+			if s.runs == 1 {
+				s.costKnown = true
+			}
+			s.cost += *r.Telemetry.EstimatedUSD
+		}
+	}
+	var table strings.Builder
+	table.WriteString(`<section><h2>Study comparison</h2><table><tr><th>arm</th><th>repeats</th><th>passed</th><th>cost</th><th>cost telemetry</th></tr>`)
+	for _, arm := range m.Arms {
+		s := stats[arm.ID]
+		cost := "incomplete"
+		if s.costKnown {
+			cost = fmt.Sprintf("$%.6f", s.cost)
+		}
+		fmt.Fprintf(&table, `<tr><td>%s</td><td>%d/%d</td><td>%d</td><td>%s</td><td>%s</td></tr>`, html.EscapeString(arm.ID), s.repeats, len(m.Scenarios)*m.Repeats, s.passed, html.EscapeString(cost), map[bool]string{true: "complete", false: "incomplete"}[s.costKnown])
+	}
+	table.WriteString(`</table>`)
+	if manifestPath == "" {
+		manifestPath = "STUDY.yaml"
+	}
+	fmt.Fprintf(&table, `<p class="muted">Reproduce locally: <code>hbench study run %s --approve-spend</code></p></section>`, html.EscapeString(manifestPath))
+	return table.String()
 }
 
 func renderRun(r loop.RunRecord) string {

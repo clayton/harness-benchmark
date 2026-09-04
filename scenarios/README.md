@@ -1,48 +1,78 @@
 # Scenarios
 
-A **scenario** is a frozen task the agent must solve. Agents receive only the
-`prompt` and the repo at `base_ref`. They never see `gold_ref` or the gold patch.
+A scenario is a frozen coding task. The agent receives the prompt and the
+repository at `base_ref`. The judge may use `gold_ref`, hidden tests, or
+behavioral checks; those values never enter the agent prompt or workspace.
 
-## Types
+## Choose a task
 
-| Type | Best for |
-|------|----------|
-| `bugfix` | Isolated, SWE-bench-like; failing tests as oracle |
-| `feature` | Changelog / minor-version feature deltas |
-| `refactor` | Behavior-preserving structural change |
+Use one logical bug, feature, refactor, rewrite, or endurance task. Prefer a
+small change with an executable acceptance test and a maintained repository.
+Keep the prompt focused on intent, constraints, and observable behavior.
 
-## Authoring rules
+Scenario IDs and published versions are immutable. If the repository ref,
+dependency lockfile, image, setup command, or evaluator changes, publish a new
+version.
 
-1. **Prompt = human intent**, not the solution. Issue body + acceptance criteria is ideal.
-2. Prefer tasks with **automated tests** you can run after the patch.
-3. Tag `contamination_risk` honestly (`high` for famous old issues).
-4. Keep `id` stable forever — results point at it.
-5. One logical unit of work per scenario (one bug, or 1–3 tightly related features).
+## Author a manifest
 
-## v0 corpus (curated)
+For a repository task, provide a public GitHub URL, a 40-character immutable
+`base_ref`, a target `gold_ref`, an intent prompt, and acceptance commands. For
+an original task, use a scaffold workspace with authored files and keep the
+solution in the evaluator or target reference.
 
-See [SHORTLIST.md](./SHORTLIST.md) for research notes and alternates.
+The authoring helpers enforce canonical relative paths and reject unsafe
+scaffolds:
 
-| ID | Lang | Notes |
-|----|------|-------|
-| `python-pytest-approx-inf-rel` | Python | Easy smoke; pytest approx + inf/rel |
-| `go-chi-tee-bytes-double-count` | Go | Easy smoke; middleware byte count |
-| `js-commander-negative-exp-E` | JS | Easy smoke; negative exponent `-E` |
-| `python-fastapi-stream-router-schema` | Python | Harder multi-file OpenAPI/routing |
-| `python-fastapi-stream-router-incomplete` | Python | Incomplete SUT prompt; use with proxy/human |
-| `ruby-rails-length-validator-nil-proc` | Ruby | Shortlisted; not fully smoked in v0 |
-| `ts-got-searchparams-setter` | TS | Shortlisted; not fully smoked in v0 |
+```go
+scenario, err := corpus.NewScaffoldScenario(corpus.NewScenarioOptions{
+    ID: "cache-header-rewrite@1", Title: "Rewrite cache headers",
+    Prompt: "Make the cache header ...", Type: "feature", Language: "go",
+}, map[string]string{"README.md": "starter\n"})
+if err != nil { return err }
+return corpus.WriteScenario("scenarios/cache-header-rewrite.yaml", scenario)
+```
 
-`example-synthetic-bugfix` is tooling-only — **do not use for claims**.
+For an existing YAML file, call `corpus.ValidateScenarioFile(path)` from a
+focused Go check before submitting it. A local run also exercises resolution,
+trust, fetching, workspace setup, and judging:
 
-Feature-delta scenarios are deferred until the bugfix loop is proven.
+```bash
+go test -mod=mod ./internal/corpus
+hbench scenario new --out scenarios/cache-header-rewrite@1.yaml \
+  --id cache-header-rewrite@1 --title "Rewrite cache headers" \
+  --prompt "Make the cache header reflect the configured TTL." \
+  --type rewrite --language go \
+  --files-json '{"README.md":"starter\n"}'
+hbench scenario validate scenarios/cache-header-rewrite@1.yaml
+hbench run -s ./scenarios/cache-header-rewrite@1.yaml --harness manual
+```
 
-### Selection heuristics
+The run can remain private. Publication is a separate explicit action.
 
-**Good:** clear intent, tests, scoped change, maintained history, recent merge.
+## Community submission
 
-**Risky:** celebrity textbook bugs, flaky builds, ambiguous acceptance, native/security-only work without sandboxing.
+Submit the validated manifest through Agent Rodeo's Community Scenarios page.
+The site checks repository access, ancestry, immutable refs, the execution
+surface, and the scenario contract. Community acceptance and official rating
+eligibility are separate: an accepted proposal becomes runnable community
+material; only a trusted Controlled validation can affect the official
+rating.
 
-## File format
+Do not include provider credentials, private evaluator files, target patches,
+or commands that install unplanned dependencies. Dependency metadata must be
+locked and versioned with the scenario.
 
-One YAML file per scenario. See any curated file or `example-synthetic-bugfix.yaml`.
+## Scenario types
+
+| Type | Use |
+|---|---|
+| `bugfix` | A focused regression with a failing or hidden test. |
+| `feature` | A small behavior addition with acceptance tests. |
+| `refactor` | A behavior-preserving structural change. |
+| `rewrite` | A bounded original implementation, often scaffolded. |
+| `endurance` | A repeat or long-running task with explicit limits. |
+
+See [SHORTLIST.md](SHORTLIST.md) for research notes and existing candidate
+tasks. `example-synthetic-bugfix.yaml` documents the shape only and must not
+be used for a public claim.

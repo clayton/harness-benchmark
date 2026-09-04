@@ -318,15 +318,24 @@ func decodeRodeoManifest(raw []byte, identifier string) (Scenario, error) {
 	if scenario.Status != "community" && scenario.Status != "candidate" && scenario.Status != "official" && scenario.Status != "active" && scenario.Status != "runnable" {
 		return Scenario{}, fmt.Errorf("rodeo scenario %s is not runnable (status %q)", identifier, scenario.Status)
 	}
-	if !strings.HasPrefix(scenario.Repo.URL, "https://github.com/") {
-		return Scenario{}, fmt.Errorf("rodeo scenario repository must use https://github.com/")
-	}
 	hex40 := regexp.MustCompile(`^[0-9a-f]{40}$`)
-	if !hex40.MatchString(scenario.Repo.BaseRef) || (scenario.Repo.GoldRef != "" && !hex40.MatchString(scenario.Repo.GoldRef)) {
-		return Scenario{}, fmt.Errorf("rodeo scenario refs must be full lowercase commit hashes")
-	}
 	if scenario.Workspace.Kind != "" && scenario.Workspace.Kind != "scaffold" {
 		return Scenario{}, fmt.Errorf("unsupported workspace kind %q", scenario.Workspace.Kind)
+	}
+	if scenario.Workspace.Kind == "scaffold" {
+		if len(scenario.Workspace.Files) == 0 {
+			return Scenario{}, fmt.Errorf("scaffold scenario must contain workspace files")
+		}
+		if _, err := ScaffoldPaths(scenario.Workspace.Files); err != nil {
+			return Scenario{}, err
+		}
+	} else {
+		if !strings.HasPrefix(scenario.Repo.URL, "https://github.com/") {
+			return Scenario{}, fmt.Errorf("rodeo scenario repository must use https://github.com/")
+		}
+		if !hex40.MatchString(scenario.Repo.BaseRef) || (scenario.Repo.GoldRef != "" && !hex40.MatchString(scenario.Repo.GoldRef)) {
+			return Scenario{}, fmt.Errorf("rodeo scenario refs must be full lowercase commit hashes")
+		}
 	}
 	scenario.External = true
 	return scenario, nil

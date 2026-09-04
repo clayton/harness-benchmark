@@ -264,3 +264,35 @@ func TestBuildPayloadPublishesFrozenStudyBinding(t *testing.T) {
 		t.Fatalf("study config=%+v", config)
 	}
 }
+
+func TestBuildPayloadStripsFrozenSkillPathsButKeepsIdentity(t *testing.T) {
+	l := paths.New(t.TempDir(), t.TempDir())
+	id := "faceb00c1234"
+	worktree := l.Worktree(id)
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.Save(l, loop.RunRecord{ID: id, ScenarioID: "task", Status: "completed", Worktree: worktree, Harness: "pi", Model: "sol", Judges: []loop.JudgeScore{{Name: "test"}}, CreatedAt: loop.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := `{"config":{"mode":"personal","frozen_skills":[{"name":"review","path":"/Users/alice/.pi/skills/review","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","files":2}],"config_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","config_status":"frozen"}}`
+	if err := os.WriteFile(filepath.Join(l.RunDir(id), "snapshot.json"), []byte(snapshot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := BuildPayload(l, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := payload["snapshot"].(map[string]any)["config"].(map[string]any)
+	if config["mode"] != "personal" || config["config_sha256"] != strings.Repeat("b", 64) {
+		t.Fatalf("config=%+v", config)
+	}
+	frozen := config["frozen_skills"].([]map[string]any)
+	if len(frozen) != 1 || frozen[0]["sha256"] != strings.Repeat("a", 64) {
+		t.Fatalf("frozen=%+v", frozen)
+	}
+	raw, _ := json.Marshal(payload)
+	if bytes.Contains(raw, []byte("/Users/alice")) || bytes.Contains(raw, []byte(`"path"`)) {
+		t.Fatalf("payload leaked frozen skill path: %s", raw)
+	}
+}

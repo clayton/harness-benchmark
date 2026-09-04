@@ -26,6 +26,7 @@ func CreateRunWithModel(l paths.Layout, sc corpus.Scenario, harness, model strin
 
 type Profile struct {
 	ID              string         `json:"id,omitempty"`
+	Mode            string         `json:"mode,omitempty"`
 	Harness         string         `json:"harness"`
 	HarnessVersion  string         `json:"harness_version,omitempty"`
 	Provider        string         `json:"provider,omitempty"`
@@ -33,6 +34,11 @@ type Profile struct {
 	Reasoning       string         `json:"reasoning,omitempty"`
 	Workflow        string         `json:"workflow,omitempty"`
 	Skills          []string       `json:"skills,omitempty"`
+	LocalSkills     []string       `json:"local_skill_dirs,omitempty"`
+	FrozenSkills    []FrozenSkill  `json:"frozen_skills,omitempty"`
+	ConfigPath      string         `json:"config_path,omitempty"`
+	ConfigDigest    string         `json:"config_sha256,omitempty"`
+	ConfigStatus    string         `json:"config_status,omitempty"`
 	Extensions      []string       `json:"extensions,omitempty"`
 	Plugins         []string       `json:"plugins,omitempty"`
 	Tools           []string       `json:"tools,omitempty"`
@@ -49,9 +55,46 @@ type Profile struct {
 	StudyScenarioID string         `json:"study_scenario_id,omitempty"`
 }
 
+// FrozenSkill describes a local skill tree copied into the immutable run
+// directory. Path is relative to that run directory and never contains the
+// user's source path.
+type FrozenSkill struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Digest string `json:"sha256"`
+	Files  int    `json:"files"`
+}
+
 func CreateRunWithProfile(l paths.Layout, sc corpus.Scenario, profile Profile, runSetup bool) (RunRecord, error) {
 	id := NewID()
 	wt := l.Worktree(id)
+	var err error
+	if profile.Mode == "" {
+		profile.Mode = "clean-baseline"
+		// Manual work is an interactive personal run. Headless adapters keep
+		// the clean baseline default and must opt into personal mode explicitly.
+		if profile.Harness == "manual" {
+			profile.Mode = "personal"
+		}
+	}
+	if profile.Mode != "personal" && profile.Mode != "clean-baseline" {
+		return RunRecord{}, fmt.Errorf("invalid setup mode %q; use personal or clean-baseline", profile.Mode)
+	}
+	if len(profile.LocalSkills) > 0 && profile.Mode != "personal" {
+		return RunRecord{}, fmt.Errorf("local skill directories require --mode personal")
+	}
+	if len(profile.LocalSkills) > 0 {
+		profile, err = FreezeLocalSkills(l, id, profile)
+		if err != nil {
+			return RunRecord{}, err
+		}
+	}
+	if profile.Mode == "personal" && profile.Harness == "codex" {
+		profile, err = FreezeCodexConfig(l, id, profile)
+		if err != nil {
+			return RunRecord{}, err
+		}
+	}
 	if profile.Model == "" {
 		profile.Model = defaultModel(profile.Harness)
 	}
@@ -60,6 +103,10 @@ func CreateRunWithProfile(l paths.Layout, sc corpus.Scenario, profile Profile, r
 	}
 	if profile.ID == "" {
 		profile.ID = profile.Harness + "-" + profile.Workflow
+	}
+	snapshotSkills := append([]string(nil), profile.Skills...)
+	if len(profile.FrozenSkills) <= len(snapshotSkills) {
+		snapshotSkills = snapshotSkills[:len(snapshotSkills)-len(profile.FrozenSkills)]
 	}
 	interaction := "unattended"
 	if profile.Harness == "manual" {
@@ -77,7 +124,7 @@ func CreateRunWithProfile(l paths.Layout, sc corpus.Scenario, profile Profile, r
 		Model:          profile.Model,
 		Metadata: map[string]any{
 			"workflow":         profile.Workflow,
-			"skills":           profile.Skills,
+			"skills":           snapshotSkills,
 			"profile":          profile,
 			"interaction":      interaction,
 			"prompt_sha256_16": hex.EncodeToString(sum[:])[:16],
@@ -96,13 +143,17 @@ func CreateRunWithProfile(l paths.Layout, sc corpus.Scenario, profile Profile, r
 		"scenario":         sc,
 		"config": map[string]any{
 			"id":                rec.ConfigID,
+			"mode":              profile.Mode,
 			"harness":           profile.Harness,
 			"harness_version":   profile.HarnessVersion,
 			"provider":          profile.Provider,
 			"model":             profile.Model,
 			"reasoning":         profile.Reasoning,
 			"workflow":          profile.Workflow,
-			"skills":            profile.Skills,
+			"skills":            snapshotSkills,
+			"frozen_skills":     profile.FrozenSkills,
+			"config_sha256":     profile.ConfigDigest,
+			"config_status":     profile.ConfigStatus,
 			"extensions":        profile.Extensions,
 			"plugins":           profile.Plugins,
 			"tools":             profile.Tools,
@@ -186,6 +237,23 @@ type LaunchSpec struct {
 var modelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 
 func NormalizeDirectProfile(profile Profile) (Profile, error) {
+	if profile.Mode == "" {
+		profile.Mode = "clean-baseline"
+		// Keep the documented manual command usable without exposing a mode
+		// detail that only applies to headless baseline measurements.
+		if profile.Harness == "manual" {
+			profile.Mode = "personal"
+		}
+	}
+	if profile.Mode != "personal" && profile.Mode != "clean-baseline" {
+		return Profile{}, fmt.Errorf("invalid setup mode %q; use personal or clean-baseline", profile.Mode)
+	}
+	if len(profile.LocalSkills) > 0 && profile.Mode != "personal" {
+		return Profile{}, fmt.Errorf("local skill directories require --mode personal")
+	}
+	if profile.Harness == "" {
+		return Profile{}, fmt.Errorf("harness is required")
+	}
 	if profile.Model == "" {
 		profile.Model = defaultModel(profile.Harness)
 	}
@@ -228,6 +296,37 @@ func NormalizeDirectProfile(profile Profile) (Profile, error) {
 	}
 	if profile.Reasoning == "" && (profile.Harness == "pi" || profile.Harness == "codex") {
 		profile.Reasoning = "default"
+	}
+	if profile.Mode == "personal" && profile.Harness == "pi" {
+		// A filesystem path supplied through --skill must be frozen just like
+		// --skill-dir. Package specs keep their existing exact-version behavior.
+		declared := profile.Skills[:0]
+		for _, skill := range profile.Skills {
+			if packageVersionPattern.MatchString(skill) {
+				declared = append(declared, skill)
+				continue
+			}
+			if info, err := os.Stat(skill); err == nil {
+				if !info.IsDir() {
+					return Profile{}, fmt.Errorf("personal Pi skill path %q is not a directory", skill)
+				}
+				profile.LocalSkills = append(profile.LocalSkills, skill)
+				continue
+			}
+			declared = append(declared, skill)
+		}
+		profile.Skills = declared
+	}
+	var err error
+	profile, err = canonicalizeLocalSkills(profile)
+	if err != nil {
+		return Profile{}, err
+	}
+	// Personal profiles record the user's selected setup. Some axes may be
+	// descriptive for a given adapter; the run snapshot keeps that distinction
+	// visible instead of rejecting a useful local experiment.
+	if profile.Mode == "personal" {
+		return profile, nil
 	}
 	if err := ValidateMeasuredProfile(profile); err != nil {
 		return Profile{}, err
@@ -306,7 +405,11 @@ func HeadlessLaunchProfile(p Profile, prompt string) LaunchSpec {
 		}
 		return LaunchSpec{Program: harnessProgram(harness), Args: append(args, prompt)}
 	case "codex":
-		args := []string{"exec", "--skip-git-repo-check", "--json", "--ephemeral", "--ignore-user-config", "--sandbox", "workspace-write"}
+		args := []string{"exec", "--skip-git-repo-check", "--json", "--ephemeral"}
+		if p.Mode != "personal" {
+			args = append(args, "--ignore-user-config")
+		}
+		args = append(args, "--sandbox", "workspace-write")
 		if model != "" {
 			args = append(args, "-m", model)
 		}
@@ -355,6 +458,9 @@ var packageVersionPattern = regexp.MustCompile(`^(?:@[A-Za-z0-9._-]+/)?[A-Za-z0-
 // ValidateMeasuredProfile rejects setup labels the adapter cannot enforce.
 // A public study must measure behavior, not merely describe it in metadata.
 func ValidateMeasuredProfile(p Profile) error {
+	if len(p.LocalSkills) > 0 || len(p.FrozenSkills) > 0 {
+		return fmt.Errorf("clean-baseline cannot use local skills; use --mode personal")
+	}
 	if p.Network != "" {
 		return fmt.Errorf("%s adapter cannot enforce network=%q in local study execution", p.Harness, p.Network)
 	}
@@ -427,6 +533,25 @@ type piPackageManifest struct {
 // filesystem paths. Pi then runs with discovery disabled, so undeclared global
 // extensions and skills cannot enter the measured setup.
 func ResolveMeasuredProfile(p Profile) (Profile, error) {
+	if p.Mode == "personal" {
+		if p.Harness != "pi" {
+			return p, nil
+		}
+		var err error
+		p.Extensions, err = resolvePiPersonalArtifacts(p.Extensions, "extensions")
+		if err != nil {
+			return Profile{}, err
+		}
+		p.Plugins, err = resolvePiPersonalArtifacts(p.Plugins, "extensions")
+		if err != nil {
+			return Profile{}, err
+		}
+		p.Skills, err = resolvePiPersonalArtifacts(p.Skills, "skills")
+		if err != nil {
+			return Profile{}, err
+		}
+		return p, nil
+	}
 	if err := ValidateMeasuredProfile(p); err != nil {
 		return Profile{}, err
 	}
@@ -444,6 +569,30 @@ func ResolveMeasuredProfile(p Profile) (Profile, error) {
 		return Profile{}, err
 	}
 	return p, nil
+}
+
+func resolvePiPersonalArtifacts(specs []string, resource string) ([]string, error) {
+	resolved := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		if packageVersionPattern.MatchString(spec) {
+			paths, err := resolvePiPackages([]string{spec}, resource)
+			if err != nil {
+				return nil, err
+			}
+			resolved = append(resolved, paths...)
+			continue
+		}
+		if resource == "skills" {
+			info, err := os.Stat(spec)
+			if err != nil || !info.IsDir() {
+				return nil, fmt.Errorf("personal Pi skill path %q is not an existing directory", spec)
+			}
+		} else if _, err := os.Stat(spec); err != nil {
+			return nil, fmt.Errorf("personal Pi artifact path %q is not available: %w", spec, err)
+		}
+		resolved = append(resolved, spec)
+	}
+	return resolved, nil
 }
 
 func resolvePiPackages(specs []string, resource string) ([]string, error) {

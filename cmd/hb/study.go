@@ -38,13 +38,351 @@ type studyCell struct {
 	RunID    string `json:"run_id"`
 }
 
-func cmdStudy(args []string) error {
-	if len(args) < 2 {
-		return fmt.Errorf("usage: hbench study validate|plan|run|status|report|publish STUDY.yaml")
+type stringList []string
+
+func (s *stringList) String() string { return strings.Join(*s, ",") }
+func (s *stringList) Set(value string) error {
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			*s = append(*s, item)
+		}
 	}
-	action, path := args[0], args[1]
+	return nil
+}
+
+// initStudy creates a contract from saved setup profiles or explicit recipe
+// flags. It resolves unversioned public scenario slugs to the latest runnable
+// published version and digest, while retaining local paths only for private
+// studies.
+func initStudy(args []string) error {
+	fs := flag.NewFlagSet("study init", flag.ContinueOnError)
+	fs.SetOutput(os.Stdout)
+	question := fs.String("question", "", "testable comparison question")
+	outPath := fs.String("out", "study.yaml", "output manifest path")
+	mode := fs.String("mode", "controlled", "controlled or ecological")
+	visibility := fs.String("visibility", "public", "public or private")
+	privateStudy := fs.Bool("private", false, "allow local scenario paths; never publish this study")
+	harness := fs.String("harness", "pi", "harness for explicit model recipes")
+	provider := fs.String("provider", "", "provider for explicit model recipes")
+	reasoning := fs.String("reasoning", "", "reasoning level for explicit model recipes")
+	workflow := fs.String("workflow", "baseline", "workflow for explicit model recipes")
+	repeats := fs.Int("repeats", 1, "repeats per arm/scenario")
+	seed := fs.Int64("seed", time.Now().Unix(), "randomized cell order seed")
+	judge := fs.String("judge-protocol", "scenario-default", "judge protocol")
+	maxMinutes := fs.Int("max-minutes", 45, "maximum minutes per run")
+	maxUSDRun := fs.Float64("max-usd-per-run", 0, "optional maximum USD per run")
+	maxUSDTotal := fs.Float64("max-usd-total", 0, "optional maximum USD for the study")
+	var scenarioRefs, setupRefs, models, skillsOn stringList
+	fs.Var(&scenarioRefs, "scenario", "scenario ID, rodeo:slug[@version], or local YAML path (repeatable)")
+	fs.Var(&setupRefs, "setup", "saved setup profile ID or YAML path (repeatable)")
+	fs.Var(&models, "model", "model override (repeatable; creates model-only arms)")
+	fs.Var(&models, "models", "comma-separated model overrides (alias for --model)")
+	fs.Var(&skillsOn, "skill", "skill treatment (repeatable; creates skill off/on arms)")
+	fs.Var(&skillsOn, "skill-on", "skill treatment (alias for --skill)")
+	fs.Var(&skillsOn, "skills-on", "comma-separated skill treatment (alias for --skill)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *question == "" || len(scenarioRefs) == 0 {
+		return fmt.Errorf("usage: hbench study init --question TEXT --scenario ID [--setup PROFILE | --model MODEL] [--private]")
+	}
+	if *mode != "controlled" && *mode != "ecological" {
+		return fmt.Errorf("--mode must be controlled or ecological")
+	}
+	if *visibility != "public" && *visibility != "private" {
+		return fmt.Errorf("--visibility must be public or private")
+	}
+	if *privateStudy {
+		*visibility = "private"
+	}
+	if _, err := os.Stat(*outPath); err == nil {
+		return fmt.Errorf("refusing to overwrite %s", *outPath)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	profiles := make([]loop.Profile, 0, len(setupRefs))
+	for _, ref := range setupRefs {
+		profile, err := loadStudyProfile(ref)
+		if err != nil {
+			return err
+		}
+		profiles = append(profiles, profile)
+	}
+	if len(profiles) == 0 {
+		profiles = append(profiles, loop.Profile{ID: "base", Harness: *harness, Provider: *provider, Reasoning: *reasoning, Workflow: *workflow})
+	}
+	profiles = recipeProfiles(profiles, models, skillsOn)
+	if len(profiles) < 2 {
+		return fmt.Errorf("study init needs at least two arms; provide multiple --setup/--model values or --skill")
+	}
+	if err := ensureCorpus(layout()); err != nil {
+		return err
+	}
+
+	scenarios := make([]studycontract.Scenario, 0, len(scenarioRefs))
+	for _, ref := range scenarioRefs {
+		scenario, err := resolveStudyInitScenario(ref)
+		if err != nil {
+			return err
+		}
+		id := scenario.ID
+		digest := scenario.ManifestDigest
+		if strings.HasPrefix(ref, "rodeo:") {
+			if digest == "" {
+				return fmt.Errorf("published scenario %s did not include a manifest digest", id)
+			}
+			id = "rodeo:" + id
+		} else {
+			// Keep the caller's local path as the contract ID. The scenario's
+			// embedded ID may collide with a public cache entry and would then
+			// resolve a different executable manifest during study run.
+			id = filepath.Clean(ref)
+			if digest == "" {
+				digest, err = corpus.TrustDigest(scenario)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		scenarios = append(scenarios, studycontract.Scenario{ID: id, Digest: digest})
+	}
+
+	budget := studycontract.Budget{MaxMinutes: *maxMinutes}
+	if *maxUSDRun > 0 {
+		budget.MaxUSDPerRun = maxUSDRun
+	}
+	if *maxUSDTotal > 0 {
+		budget.MaxUSDTotal = maxUSDTotal
+	}
+	manifestVisibility := ""
+	if *visibility == "private" {
+		manifestVisibility = "private"
+	}
+	manifest := studycontract.Manifest{Schema: studycontract.Schema, ID: filepath.Base(*outPath), Question: *question, ComparisonMode: *mode, Visibility: manifestVisibility, Scenarios: scenarios, Repeats: *repeats, Seed: *seed, JudgeProtocol: *judge, WinRule: studycontract.WinRule, Budget: budget}
+	for i, profile := range profiles {
+		if profile.HarnessVersion == "" {
+			if profile.Harness == "manual" {
+				profile.HarnessVersion = "human"
+			} else {
+				profile.HarnessVersion = loop.DetectHarnessVersion(profile.Harness)
+				if profile.HarnessVersion == "" {
+					return fmt.Errorf("could not resolve %s harness version; save harness_version in the setup profile", profile.Harness)
+				}
+			}
+		}
+		arm, err := profileToStudyArm(profile, i)
+		if err != nil {
+			return err
+		}
+		manifest.Arms = append(manifest.Arms, arm)
+	}
+	manifest.VariedAxes = manifest.DifferingAxes()
+	if err := manifest.Validate(); err != nil {
+		return err
+	}
+	raw, err := yaml.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(*outPath, raw, 0o644); err != nil {
+		return err
+	}
+	fmt.Printf("Wrote %s\n", *outPath)
+	return printStudyPlan(manifest)
+}
+
+func loadStudyProfile(ref string) (loop.Profile, error) {
+	if setup, err := loop.LoadSetup(layout(), ref); err == nil {
+		return setup.Profile, nil
+	}
+	path := ref
+	if info, err := os.Stat(path); err != nil || !info.Mode().IsRegular() {
+		candidates := []string{
+			filepath.Join(layout().DataDir, "setups", ref+".json"),
+			filepath.Join(layout().DataDir, "setups", ref+".yaml"),
+			filepath.Join(layout().DataDir, "setups", ref+".yml"),
+			filepath.Join("setups", ref+".yaml"),
+			filepath.Join("configs", ref+".yaml"),
+		}
+		for _, candidate := range candidates {
+			if info, statErr := os.Stat(candidate); statErr == nil && info.Mode().IsRegular() {
+				path = candidate
+				break
+			}
+		}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return loop.Profile{}, fmt.Errorf("load setup profile %q: %w", ref, err)
+	}
+	var document map[string]any
+	if err := yaml.Unmarshal(raw, &document); err != nil {
+		return loop.Profile{}, fmt.Errorf("parse setup profile %q: %w", ref, err)
+	}
+	if nested, ok := document["profile"].(map[string]any); ok {
+		document = nested
+	}
+	encoded, err := json.Marshal(document)
+	if err != nil {
+		return loop.Profile{}, err
+	}
+	var profile loop.Profile
+	if err := json.Unmarshal(encoded, &profile); err != nil {
+		return loop.Profile{}, fmt.Errorf("decode setup profile %q: %w", ref, err)
+	}
+	if profile.ID == "" {
+		profile.ID = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	}
+	if profile.Workflow == "" {
+		profile.Workflow = "baseline"
+	}
+	return profile, nil
+}
+
+func recipeProfiles(base []loop.Profile, models, skillsOn []string) []loop.Profile {
+	var out []loop.Profile
+	for _, original := range base {
+		candidates := models
+		if len(candidates) == 0 {
+			candidates = []string{original.Model}
+		}
+		for modelIndex, model := range candidates {
+			p := original
+			if model != "" {
+				p.Model = model
+			}
+			if len(candidates) > 1 {
+				label := regexp.MustCompile(`[^A-Za-z0-9._-]+`).ReplaceAllString(model, "-")
+				p.ID = original.ID + "-" + label
+				if label == "" {
+					p.ID = fmt.Sprintf("%s-model-%d", original.ID, modelIndex+1)
+				}
+			}
+			if len(skillsOn) > 0 {
+				off := p
+				off.Skills = nil
+				off.ID = p.ID + "-skills-off"
+				on := p
+				on.Skills = append([]string(nil), skillsOn...)
+				on.ID = p.ID + "-skills-on"
+				out = append(out, off, on)
+			} else {
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+func profileToStudyArm(p loop.Profile, index int) (studycontract.Arm, error) {
+	id := p.ID
+	if id == "" {
+		id = fmt.Sprintf("arm-%d", index+1)
+	}
+	if len(p.LocalSkills) > 0 && p.Harness != "pi" {
+		return studycontract.Arm{}, fmt.Errorf("local skill directories are currently supported by the pi adapter only")
+	}
+	if len(p.LocalSkills) > 0 && p.Mode != "personal" {
+		return studycontract.Arm{}, fmt.Errorf("local skill directories require personal mode")
+	}
+	mode := ""
+	configDigest, configStatus := "", ""
+	if p.Mode == "personal" {
+		if p.Harness == "codex" {
+			var err error
+			configDigest, configStatus, err = loop.CodexConfigFingerprint()
+			if err != nil {
+				return studycontract.Arm{}, err
+			}
+		}
+		mode = p.Mode
+	}
+	digests := make([]string, 0, len(p.LocalSkills))
+	for _, path := range p.LocalSkills {
+		digest, err := loop.LocalSkillDigest(path)
+		if err != nil {
+			return studycontract.Arm{}, err
+		}
+		digests = append(digests, digest)
+	}
+	return studycontract.Arm{ID: id, Mode: mode, LocalSkills: p.LocalSkills, LocalSkillDigests: digests, ConfigDigest: configDigest, ConfigStatus: configStatus, Harness: p.Harness, Version: p.HarnessVersion, Provider: p.Provider, Model: p.Model, Reasoning: p.Reasoning, Workflow: p.Workflow, Skills: p.Skills, Extensions: p.Extensions, Plugins: p.Plugins, Tools: p.Tools, Subagents: p.Subagents, Environment: p.Environment, Network: p.Network}, nil
+}
+
+func resolveStudyInitScenario(ref string) (corpus.Scenario, error) {
+	if !strings.HasPrefix(ref, "rodeo:") {
+		return corpus.Resolve(layout().ScenariosDir(), "", ref)
+	}
+	identifier := strings.TrimPrefix(ref, "rodeo:")
+	if !strings.Contains(identifier, "@") {
+		latest, err := latestPublishedScenario(identifier)
+		if err != nil {
+			return corpus.Scenario{}, err
+		}
+		identifier = latest
+	}
+	return corpus.FetchRodeo(layout().ScenariosDir(), identifier, nil)
+}
+
+func latestPublishedScenario(slug string) (string, error) {
+	origin, err := publish.ValidatedRodeoURL()
+	if err != nil {
+		return "", err
+	}
+	request, err := http.NewRequest(http.MethodGet, origin+"/api/v1/scenarios", nil)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", fmt.Errorf("fetch published scenarios: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("fetch published scenarios: HTTP %d", response.StatusCode)
+	}
+	var entries []struct {
+		Slug    string `json:"slug"`
+		Version int    `json:"version"`
+		Status  string `json:"status"`
+	}
+	if err := json.NewDecoder(io.LimitReader(response.Body, 1<<20)).Decode(&entries); err != nil {
+		return "", err
+	}
+	best := 0
+	for _, entry := range entries {
+		if entry.Slug == slug && entry.Version > best && entry.Status != "retired" && entry.Status != "superseded" {
+			best = entry.Version
+		}
+	}
+	if best == 0 {
+		return "", fmt.Errorf("published scenario %q was not found", slug)
+	}
+	return fmt.Sprintf("%s@%d", slug, best), nil
+}
+
+func cmdStudy(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: hbench study init|validate|plan|run|status|report|publish STUDY.yaml")
+	}
+	action := args[0]
+	if action == "init" {
+		return initStudy(args[1:])
+	}
+	if len(args) < 2 {
+		return fmt.Errorf("usage: hbench study init|validate|plan|run|status|report|publish STUDY.yaml")
+	}
+	path := args[1]
+	actionArgs := args[2:]
+	// Accept the conventional flag-before-positional form for publication
+	// preview as well as the documented `publish STUDY.yaml --preview` form.
+	if action == "publish" && path == "--preview" && len(args) >= 3 {
+		path = args[2]
+		actionArgs = append([]string{"--preview"}, args[3:]...)
+	}
 	if path == "--help" || path == "-h" {
-		fmt.Println("usage: hbench study validate|plan|run|status|report|publish STUDY.yaml")
+		fmt.Println("usage: hbench study init|validate|plan|run|status|report|publish STUDY.yaml")
 		return nil
 	}
 	m, err := studycontract.Load(path)
@@ -53,24 +391,28 @@ func cmdStudy(args []string) error {
 	}
 	switch action {
 	case "validate":
-		fmt.Printf("Valid publishable %s study %s\ncontract: %s\n", m.ComparisonMode, m.ID, m.Digest())
+		label := "publishable"
+		if m.IsPrivate() {
+			label = "private, non-publishable"
+		}
+		fmt.Printf("Valid %s %s study %s\ncontract: %s\n", label, m.ComparisonMode, m.ID, m.Digest())
 		return nil
 	case "plan":
 		return printStudyPlan(m)
 	case "status":
 		return printStudyStatus(m)
 	case "report":
-		return writeStudyReport(m)
+		return writeStudyReport(path, m)
 	case "run":
-		return runStudy(m, args[2:])
+		return runStudy(m, actionArgs)
 	case "publish":
-		return publishStudy(path, m, args[2:])
+		return publishStudy(path, m, actionArgs)
 	default:
 		return fmt.Errorf("unknown study command %q", action)
 	}
 }
 
-func writeStudyReport(m studycontract.Manifest) error {
+func writeStudyReport(manifestPath string, m studycontract.Manifest) error {
 	s, err := loadStudyState(m)
 	if err != nil {
 		return err
@@ -79,7 +421,7 @@ func writeStudyReport(m studycontract.Manifest) error {
 	for _, cell := range s.Completed {
 		runIDs[cell.RunID] = true
 	}
-	path, n, err := report.WriteStudyRuns(layout(), m.ID, runIDs)
+	path, n, err := report.WriteStudyComparison(layout(), m, runIDs, manifestPath)
 	if err != nil {
 		return err
 	}
@@ -88,7 +430,11 @@ func writeStudyReport(m studycontract.Manifest) error {
 }
 
 func printStudyPlan(m studycontract.Manifest) error {
-	fmt.Printf("%s\nmode: %s\npublishable: yes\ncontract: %s\n", m.Question, m.ComparisonMode, m.Digest())
+	publishable := "yes"
+	if m.IsPrivate() {
+		publishable = "no (private; local report/preview only)"
+	}
+	fmt.Printf("%s\nmode: %s\npublishable: %s\ncontract: %s\n", m.Question, m.ComparisonMode, publishable, m.Digest())
 	fmt.Printf("matrix: %d arms × %d scenarios × %d repeats = %d runs\n", len(m.Arms), len(m.Scenarios), m.Repeats, m.RunCount())
 	fmt.Printf("changed axes: %s\n", strings.Join(m.DifferingAxes(), ", "))
 	fmt.Printf("confounds: held constant except %s\n", strings.Join(m.DifferingAxes(), ", "))
@@ -174,6 +520,14 @@ func runStudy(m studycontract.Manifest, args []string) error {
 	if err != nil {
 		return err
 	}
+	// A pending run already contains a frozen skill copy. Its source may have
+	// changed after the run was created, so only new cells require source
+	// verification here; Execute verifies the pending copy itself.
+	if s.Pending == nil {
+		if err := verifyStudyLocalSkills(m); err != nil {
+			return err
+		}
+	}
 	if err := verifyStudyScenarios(m); err != nil {
 		return err
 	}
@@ -220,10 +574,20 @@ func runStudy(m studycontract.Manifest, args []string) error {
 		if err != nil {
 			return err
 		}
-		if s.Pending != nil && cellKey(s.Pending.Arm, s.Pending.Scenario, s.Pending.Repeat) == cellKey(c.Arm, c.Scenario, c.Repeat) {
+		if err := verifyStudyScenario(sc, frozenScenario); err != nil {
+			return err
+		}
+		pending := s.Pending != nil && cellKey(s.Pending.Arm, s.Pending.Scenario, s.Pending.Repeat) == cellKey(c.Arm, c.Scenario, c.Repeat)
+		if pending {
 			c = *s.Pending
 		} else {
-			profile := loop.Profile{ID: arm.ID, Harness: arm.Harness, HarnessVersion: arm.Version, Provider: arm.Provider, Model: arm.Model, Reasoning: arm.Reasoning, Workflow: arm.Workflow, Skills: arm.Skills, Extensions: arm.Extensions, Plugins: arm.Plugins, Tools: arm.Tools, Subagents: arm.Subagents, Environment: arm.Environment, Network: arm.Network, JudgeProtocol: m.JudgeProtocol, Budget: studyBudgetDescriptor(m), StudyID: m.ID, ContractDigest: m.Digest(), ArmID: c.Arm, Repeat: c.Repeat, ScenarioDigest: frozenScenario.Digest, StudyScenarioID: c.Scenario}
+			// Verify immediately before creating each run. A multi-cell study can
+			// otherwise copy a changed local skill into later runs after the
+			// invocation-level check has already passed.
+			if err := verifyStudyArmLocalSkills(arm); err != nil {
+				return err
+			}
+			profile := loop.Profile{ID: arm.ID, Mode: arm.Mode, Harness: arm.Harness, HarnessVersion: arm.Version, Provider: arm.Provider, Model: arm.Model, Reasoning: arm.Reasoning, Workflow: arm.Workflow, Skills: arm.Skills, LocalSkills: arm.LocalSkills, ConfigDigest: arm.ConfigDigest, ConfigStatus: arm.ConfigStatus, Extensions: arm.Extensions, Plugins: arm.Plugins, Tools: arm.Tools, Subagents: arm.Subagents, Environment: arm.Environment, Network: arm.Network, JudgeProtocol: m.JudgeProtocol, Budget: studyBudgetDescriptor(m), StudyID: m.ID, ContractDigest: m.Digest(), ArmID: c.Arm, Repeat: c.Repeat, ScenarioDigest: frozenScenario.Digest, StudyScenarioID: c.Scenario}
 			rec, err := loop.CreateRunWithProfile(layout(), sc, profile, true)
 			if err != nil {
 				return err
@@ -269,6 +633,40 @@ func runStudy(m studycontract.Manifest, args []string) error {
 		}
 	}
 	return printStudyStatus(m)
+}
+
+func verifyStudyLocalSkills(m studycontract.Manifest) error {
+	for _, arm := range m.Arms {
+		if err := verifyStudyArmLocalSkills(arm); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func verifyStudyArmLocalSkills(arm studycontract.Arm) error {
+	if len(arm.LocalSkills) != len(arm.LocalSkillDigests) {
+		return fmt.Errorf("arm %s local skill paths and digests do not match", arm.ID)
+	}
+	for i, path := range arm.LocalSkills {
+		digest, err := loop.LocalSkillDigest(path)
+		if err != nil {
+			return fmt.Errorf("arm %s local skill %q: %w", arm.ID, path, err)
+		}
+		if digest != arm.LocalSkillDigests[i] {
+			return fmt.Errorf("arm %s local skill drift at %q: contract has %s, current content is %s", arm.ID, path, arm.LocalSkillDigests[i], digest)
+		}
+	}
+	if arm.Mode == "personal" && arm.Harness == "codex" {
+		digest, status, err := loop.CodexConfigFingerprint()
+		if err != nil {
+			return err
+		}
+		if digest != arm.ConfigDigest || status != arm.ConfigStatus {
+			return fmt.Errorf("arm %s personal Codex config drift: contract has %s/%s, current config is %s/%s", arm.ID, arm.ConfigStatus, arm.ConfigDigest, status, digest)
+		}
+	}
+	return nil
 }
 
 func enforceStudyBudget(m studycontract.Manifest, s studyState) error {
@@ -380,16 +778,24 @@ func verifyStudyScenarios(m studycontract.Manifest) error {
 		if err != nil {
 			return fmt.Errorf("resolve frozen scenario %s: %w", frozen.ID, err)
 		}
-		digest := sc.ManifestDigest
-		if digest == "" {
-			digest, err = corpus.TrustDigest(sc)
-			if err != nil {
-				return err
-			}
+		if err := verifyStudyScenario(sc, frozen); err != nil {
+			return err
 		}
-		if digest != frozen.Digest {
-			return fmt.Errorf("scenario %s digest drift: contract has %s, resolved scenario has %s", frozen.ID, frozen.Digest, digest)
+	}
+	return nil
+}
+
+func verifyStudyScenario(sc corpus.Scenario, frozen studycontract.Scenario) error {
+	digest := sc.ManifestDigest
+	if digest == "" {
+		var err error
+		digest, err = corpus.TrustDigest(sc)
+		if err != nil {
+			return err
 		}
+	}
+	if digest != frozen.Digest {
+		return fmt.Errorf("scenario %s digest drift: contract has %s, resolved scenario has %s", frozen.ID, frozen.Digest, digest)
 	}
 	return nil
 }
@@ -455,7 +861,7 @@ func verifyStudyHarnesses(m studycontract.Manifest) error {
 
 func verifyStudyExecutionProfiles(m studycontract.Manifest) error {
 	for _, arm := range m.Arms {
-		profile := loop.Profile{Harness: arm.Harness, Provider: arm.Provider, Model: arm.Model, Reasoning: arm.Reasoning, Workflow: arm.Workflow, Skills: arm.Skills, Extensions: arm.Extensions, Plugins: arm.Plugins, Tools: arm.Tools, Subagents: arm.Subagents, Environment: arm.Environment, Network: arm.Network}
+		profile := loop.Profile{Mode: arm.Mode, Harness: arm.Harness, Provider: arm.Provider, Model: arm.Model, Reasoning: arm.Reasoning, Workflow: arm.Workflow, Skills: arm.Skills, Extensions: arm.Extensions, Plugins: arm.Plugins, Tools: arm.Tools, Subagents: arm.Subagents, Environment: arm.Environment, Network: arm.Network}
 		if _, err := loop.ResolveMeasuredProfile(profile); err != nil {
 			return fmt.Errorf("arm %s: %w", arm.ID, err)
 		}
@@ -466,6 +872,7 @@ func verifyStudyExecutionProfiles(m studycontract.Manifest) error {
 func publishStudy(path string, m studycontract.Manifest, args []string) error {
 	fs := flag.NewFlagSet("study publish", flag.ContinueOnError)
 	calloutSlug := fs.String("callout", "", "Callout slug for this frozen contract")
+	preview := fs.Bool("preview", false, "show the publication payload without uploading")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -473,13 +880,25 @@ func publishStudy(path string, m studycontract.Manifest, args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := verifyStudyLocalSkills(m); err != nil {
+		return err
+	}
+	if err := validateStudyStateCells(m, s); err != nil {
+		return err
+	}
 	if len(s.Completed) != m.RunCount() || s.Pending != nil {
 		return fmt.Errorf("study is incomplete; run hbench study status")
 	}
-	if err := verifyStudyScenarios(m); err != nil {
+	if err := enforceStudyBudget(m, s); err != nil {
 		return err
 	}
-	if err := enforceStudyBudget(m, s); err != nil {
+	if m.IsPrivate() && !*preview {
+		return fmt.Errorf("private studies cannot be published; use --preview for a local publication check")
+	}
+	if *preview {
+		return printStudyPublicationPreview(path, m, s)
+	}
+	if err := verifyStudyScenarios(m); err != nil {
 		return err
 	}
 	if *calloutSlug == "" {
@@ -509,6 +928,85 @@ func publishStudy(path string, m studycontract.Manifest, args []string) error {
 	return nil
 }
 
+func validateStudyStateCells(m studycontract.Manifest, s studyState) error {
+	if s.Pending != nil {
+		return fmt.Errorf("study is incomplete; run hbench study status")
+	}
+	allowedArms, allowedScenarios := map[string]bool{}, map[string]bool{}
+	for _, arm := range m.Arms {
+		allowedArms[arm.ID] = true
+	}
+	for _, scenario := range m.Scenarios {
+		allowedScenarios[scenario.ID] = true
+	}
+	seen := map[string]bool{}
+	for _, cell := range s.Completed {
+		if !allowedArms[cell.Arm] || !allowedScenarios[cell.Scenario] || cell.Repeat < 1 || cell.Repeat > m.Repeats {
+			return fmt.Errorf("saved state contains undeclared study cell %s/%s repeat %d", cell.Arm, cell.Scenario, cell.Repeat)
+		}
+		key := cellKey(cell.Arm, cell.Scenario, cell.Repeat)
+		if seen[key] {
+			return fmt.Errorf("saved state contains duplicate study cell %s/%s repeat %d", cell.Arm, cell.Scenario, cell.Repeat)
+		}
+		seen[key] = true
+	}
+	return nil
+}
+
+func printStudyPublicationPreview(path string, m studycontract.Manifest, s studyState) error {
+	type armPreview struct {
+		Arm           string  `json:"arm"`
+		Runs          int     `json:"runs"`
+		Expected      int     `json:"expected"`
+		CostUSD       float64 `json:"cost_usd"`
+		CostComplete  bool    `json:"cost_complete"`
+		TokenComplete bool    `json:"token_complete"`
+	}
+	byArm := map[string]*armPreview{}
+	for _, arm := range m.Arms {
+		byArm[arm.ID] = &armPreview{Arm: arm.ID, Expected: len(m.Scenarios) * m.Repeats, CostComplete: true, TokenComplete: true}
+	}
+	for _, cell := range s.Completed {
+		rec, err := loop.Load(layout(), cell.RunID)
+		if err != nil {
+			return err
+		}
+		p := byArm[cell.Arm]
+		if p == nil {
+			p = &armPreview{Arm: cell.Arm, Expected: len(m.Scenarios) * m.Repeats, CostComplete: true, TokenComplete: true}
+			byArm[cell.Arm] = p
+		}
+		p.Runs++
+		if rec.Telemetry.EstimatedUSD == nil || rec.Telemetry.Complete == nil || !*rec.Telemetry.Complete ||
+			(rec.Telemetry.CostKind != "actual" && rec.Telemetry.CostKind != "estimated") ||
+			(rec.Telemetry.CostKind == "estimated" && rec.Telemetry.PriceSnapshot == "") {
+			p.CostComplete = false
+		} else {
+			p.CostUSD += *rec.Telemetry.EstimatedUSD
+		}
+		if rec.Telemetry.TokenComplete == nil || !*rec.Telemetry.TokenComplete {
+			p.TokenComplete = false
+		}
+	}
+	arms := make([]armPreview, 0, len(byArm))
+	for _, arm := range m.Arms {
+		arms = append(arms, *byArm[arm.ID])
+	}
+	payload := map[string]any{
+		"schema": "hb.study.publish-preview.v1", "manifest": m, "contract_digest": m.Digest(),
+		"private": m.IsPrivate(), "runs": arms,
+		"reproduction": fmt.Sprintf("hbench study run %s --approve-spend", path),
+		"publication":  "hbench study publish " + path,
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(raw))
+	fmt.Println("Nothing was uploaded.")
+	return nil
+}
+
 func studyRunLink(c studyCell) map[string]any {
 	return map[string]any{"client_run_id": c.RunID, "arm_id": c.Arm, "scenario_id": c.Scenario, "repeat": c.Repeat}
 }
@@ -535,6 +1033,9 @@ func cmdCallout(args []string) error {
 		m, err := studycontract.Load(args[1])
 		if err != nil {
 			return err
+		}
+		if m.IsPrivate() {
+			return fmt.Errorf("private studies cannot create public Callouts")
 		}
 		sources := m.Sources
 		if *source != "" {

@@ -21,6 +21,103 @@ func TestRejectsLocalScenarioIDsBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestPrivateAllowsLocalScenarioIDs(t *testing.T) {
+	m := valid()
+	m.Visibility = "private"
+	m.Scenarios[0].ID = "scenarios/local.yaml"
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRejectsUnknownVisibility(t *testing.T) {
+	m := valid()
+	m.Visibility = "internal"
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "visibility") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestPublicRejectsPersonalSetupFields(t *testing.T) {
+	m := valid()
+	m.Arms[0].Mode = "personal"
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "private studies") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func TestLocalSkillPathsDoNotDefineIdentityButContentDoes(t *testing.T) {
+	m := valid()
+	m.Visibility = "private"
+	m.Arms[0].Harness = "pi"
+	m.Arms[1].Harness = m.Arms[0].Harness
+	m.Arms[0].Mode = "personal"
+	m.Arms[1].Mode = "personal"
+	m.VariedAxes = []string{"skills"}
+	m.Arms[0].LocalSkills = []string{"/private/one"}
+	m.Arms[0].LocalSkillDigests = []string{strings.Repeat("b", 64)}
+	m.Arms[1].LocalSkills = []string{"/private/two"}
+	m.Arms[1].LocalSkillDigests = []string{strings.Repeat("c", 64)}
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(m.DifferingAxes(), "skills") {
+		t.Fatalf("local content difference was not an axis: %v", m.DifferingAxes())
+	}
+	left := m.Digest()
+	m.Arms[0].LocalSkills[0] = "/another/path"
+	if got := m.Digest(); got != left {
+		t.Fatalf("path changed contract digest: %s != %s", got, left)
+	}
+	m.Arms[0].LocalSkillDigests[0] = strings.Repeat("d", 64)
+	if got := m.Digest(); got == left {
+		t.Fatal("local skill content digest did not change contract digest")
+	}
+}
+
+func TestPrivateModeIsAComparisonAxis(t *testing.T) {
+	m := valid()
+	m.Visibility = "private"
+	m.Arms[0].Mode = "clean-baseline"
+	m.Arms[1].Mode = "personal"
+	m.VariedAxes = []string{"harness", "mode"}
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !contains(m.DifferingAxes(), "mode") {
+		t.Fatalf("mode difference was not an axis: %v", m.DifferingAxes())
+	}
+}
+
+func TestPrivatePersonalCodexNeedsConfigFingerprint(t *testing.T) {
+	m := valid()
+	m.Visibility = "private"
+	m.Arms[0].Mode = "personal"
+	m.Arms[0].Harness = "codex"
+	m.Arms[1].Mode = "personal"
+	m.VariedAxes = []string{"harness", "config"}
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "config fingerprint") {
+		t.Fatalf("got %v", err)
+	}
+	m.Arms[0].ConfigStatus = "missing"
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	m.Arms[1].ConfigStatus = "missing"
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "only supported for personal codex") {
+		t.Fatalf("got %v", err)
+	}
+}
+
+func contains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAcceptsPublishedScenarioIDWithUppercase(t *testing.T) {
 	m := valid()
 	m.Scenarios[0].ID = "rodeo:js-commander-negative-exp-E@1"

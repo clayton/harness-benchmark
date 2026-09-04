@@ -35,6 +35,9 @@ func ValidationPayload(scenario corpus.Scenario, pack Pack, packDigest string, r
 }
 
 func Run(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath, relayImage, artifactDir, workspace string) (RunResult, error) {
+	if err := pack.ValidateForScenario(scenario); err != nil {
+		return RunResult{}, err
+	}
 	rt, err := SelectRuntime(os.Getenv("HB_RUNTIME"))
 	if err != nil {
 		return RunResult{}, err

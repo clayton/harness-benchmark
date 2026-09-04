@@ -1,58 +1,99 @@
 # hbench examples
 
-These examples use the current `hbench` CLI. Results stay local until you
-explicitly publish them.
+These commands use the Go `hbench` CLI. Results stay local until you explicitly
+publish them. Replace `RUN_ID` with the ID printed by hbench.
 
-## Manual run
+## Personal setup
+
+Save a repeatable recipe for a model, reasoning level, workflow, and local Pi
+skill:
 
 ```bash
-hbench inspect -s rodeo:js-commander-negative-exp-E@1
-hbench run -s rodeo:js-commander-negative-exp-E@1 --harness manual
-# edit the printed workspace, then:
-hbench finish
+hbench setup save review-pi \
+  --harness pi \
+  --provider openrouter \
+  --model openrouter/z-ai/glm-5.3-flash \
+  --reasoning high \
+  --workflow plan-first \
+  --skill-dir ./skills/review
+hbench setup show review-pi
+hbench run -s rodeo:js-commander-negative-exp-E@3 --setup review-pi --runtime native
+hbench execute RUN_ID
 hbench report
 ```
 
-## Headless run
+The local skill directory is copied and hashed for that run. Personal profiles
+record selected values; adapter support determines which values are enforced.
+
+## Clean baseline
+
+Use the sealed OCI path when the scenario publishes digest-pinned images:
 
 ```bash
 hbench ride -s rodeo:js-commander-negative-exp-E@3 \
   --harness pi --model openrouter/z-ai/glm-5.3-flash \
-  --approve-spend
-hbench report
-```
-
-The participant command defaults to a $1 relay-enforced cap; change it with
-`--max-usd`. It needs no host Node, npm, or Pi installation.
-
-## OCI-controlled execution
-
-Evaluator-controlled runs use an OCI-compatible CLI. `auto` selects Docker,
-Podman, or nerdctl; Colima and Dory Docker-compatible contexts need no special
-adapter.
-
-```bash
-hbench controlled run --scenario rodeo:slug@version \
-  --pack ./evaluator --key-id <runner-key> \
   --runtime auto --approve-spend
 ```
 
-The scenario manifest may require separate immutable fetch consent, and
-`--approve-spend` is required before credential-backed execution. Use `--runtime native` only as the advanced compatibility path for scenarios
-without a published OCI environment image.
+The OCI relay has a default **$1 hard cap per ride**. `--max-usd` changes that
+cap. The command requires `--approve-spend` because it invokes a model.
 
-## Study
-
-```bash
-hbench study validate experiments/example.yaml
-hbench study plan experiments/example.yaml
-hbench study run experiments/example.yaml --approve-spend
-hbench study report experiments/example.yaml
-```
-
-`hbench study report` includes only runs bound to that study contract. It does
-not upload results. Publishing is always a separate explicit command:
+## Manual run
 
 ```bash
-hbench publish <run-id>
+hbench run -s rodeo:js-commander-negative-exp-E@3 --harness manual
+# edit the printed workspace
+hbench finish RUN_ID
+hbench report
 ```
+
+## Compare setups
+
+```bash
+hbench study init \
+  --question "Does the review skill improve pass rate?" \
+  --scenario rodeo:js-commander-negative-exp-E@3 \
+  --setup clean-pi --setup review-pi \
+  --visibility private \
+  --out review-study.yaml
+hbench study validate review-study.yaml
+hbench study plan review-study.yaml
+hbench study run review-study.yaml --approve-spend
+hbench study report review-study.yaml
+```
+
+`study run` is sequential, resumable, and local. Study dollar limits are
+post-run stop thresholds and may overshoot by one run. They do not replace the
+OCI relay hard cap.
+
+Personal setups or local skill directories require a private Study. Private
+Studies can be run and reported locally, but cannot be uploaded as public Study
+contracts. Use clean setup arms for a public comparison.
+
+## Publish a finding
+
+Preview the privacy-filtered payload before uploading:
+
+```bash
+hbench publish --preview RUN_ID
+hbench publish RUN_ID
+```
+
+Publishing is separate from running. Open Range evidence is discoverable but
+does not alter the official Rodeo Rating.
+
+## Controlled execution
+
+Registered operators with a private evaluator pack use the controlled path:
+
+```bash
+hbench controlled run \
+  --scenario rodeo:slug@version \
+  --pack ./evaluator \
+  --key-id RUNNER_KEY \
+  --runtime auto \
+  --approve-spend
+```
+
+This is an operator workflow. It requires a registered key, digest-pinned
+images, and a private evaluator pack.
