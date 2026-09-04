@@ -2,6 +2,7 @@ package loop
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -80,7 +81,7 @@ func Finish(l paths.Layout, id string, sc corpus.Scenario, wallMS int, notes str
 	for _, cmd := range sc.Acceptance.TestCommands {
 		c := exec.Command("sh", "-c", cmd)
 		c.Dir = rec.Worktree
-		c.Env = minimalCommandEnv()
+		c.Env = preparationEnv(l, sc, rec.Worktree)
 		out, err := c.CombinedOutput()
 		if err != nil {
 			ok = false
@@ -173,6 +174,45 @@ func overlayLocalGold(worktree string, sc corpus.Scenario) ([]string, map[string
 		applied = append(applied, destRel)
 	}
 	return applied, backups, nil
+}
+
+func ExportGoldTests(l paths.Layout, sc corpus.Scenario, destination string) ([]string, error) {
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		return nil, err
+	}
+	var exported []string
+	for _, rel := range sc.Acceptance.GoldFiles {
+		content, err := readRooted(sc.SourceDir, rel)
+		if err != nil {
+			return exported, err
+		}
+		destRel := rel
+		if !strings.Contains(rel, "/") && strings.HasSuffix(rel, ".rb") {
+			destRel = filepath.Join("test", "hb_"+rel)
+		}
+		if err := writeRooted(destination, destRel, content, 0o644); err != nil {
+			return exported, err
+		}
+		exported = append(exported, destRel)
+	}
+	if sc.Repo.GoldRef == "" {
+		return exported, nil
+	}
+	cache, err := ensureRepo(l, sc)
+	if err != nil {
+		return exported, err
+	}
+	for _, rel := range listGoldTestFiles(cache, sc) {
+		content, err := exec.Command("git", "-C", cache, "show", sc.Repo.GoldRef+":"+rel).Output()
+		if err != nil {
+			return exported, fmt.Errorf("read gold test %s: %w", rel, err)
+		}
+		if err := writeRooted(destination, rel, content, 0o644); err != nil {
+			return exported, err
+		}
+		exported = append(exported, rel)
+	}
+	return exported, nil
 }
 
 func overlayGoldTests(cache, worktree string, sc corpus.Scenario) ([]string, map[string]*string, error) {

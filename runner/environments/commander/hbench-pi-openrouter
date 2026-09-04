@@ -1,0 +1,37 @@
+#!/bin/sh
+set -eu
+
+: "${HB_MODEL:?HB_MODEL is required}"
+: "${HB_MODEL_BASE_URL:?HB_MODEL_BASE_URL is required}"
+: "${HB_MODEL_API_KEY:?HB_MODEL_API_KEY is required}"
+
+case "$HB_MODEL" in
+  *[!A-Za-z0-9._/:+-]*|'') echo "invalid HB_MODEL" >&2; exit 2 ;;
+esac
+
+mkdir -p "$HOME/.pi/agent"
+node - <<'JS'
+const fs = require('node:fs');
+const model = process.env.HB_MODEL;
+const config = {
+  providers: {
+    'hbench-openrouter': {
+      baseUrl: `${process.env.HB_MODEL_BASE_URL}/api/v1`,
+      api: 'openai-completions',
+      apiKey: process.env.HB_MODEL_API_KEY,
+      authHeader: true,
+      models: [{ id: model, name: model, reasoning: true, contextWindow: 128000, maxTokens: 32768 }]
+    }
+  }
+};
+fs.writeFileSync(`${process.env.HOME}/.pi/agent/models.json`, JSON.stringify(config));
+JS
+
+set -- pi -p --mode json --approve --no-extensions --no-skills --no-session \
+  --provider hbench-openrouter --model "$HB_MODEL"
+if [ "${HB_REASONING:-default}" != "default" ]; then
+  set -- "$@" --thinking "$HB_REASONING"
+fi
+exec "$@" \
+  --append-system-prompt "UNATTENDED BENCHMARK MODE: Do not ask questions. Work only in /workspace. Implement the requested fix, verify it, then stop." \
+  "$(cat HB_PROMPT.txt)"

@@ -13,6 +13,17 @@ The installer is pinned to a release tag. Checksums live in the script itself. I
 
 `hbench` with no args prints **one** command. `hbench doctor` is the full report. Nothing spends tokens until you paste the printed command. The old `hb` name collided with Honeybadger's CLI, so the binary is `hbench`.
 
+Run a published scenario as a participant:
+
+```bash
+hbench ride -s rodeo:js-commander-negative-exp-E@3 --harness pi \
+  --model openrouter/z-ai/glm-5.3-flash --approve-spend
+```
+
+The default participant path needs only `hbench`, an OCI runtime, and `OPENROUTER_API_KEY`. It displays one immutable plan covering source refs, image digests, model, reasoning, the **$1 default spend cap**, timeout, and credential name; asks once; then runs and judges in sealed containers. Add `--yes` for non-interactive exact-plan approval or `--max-usd <amount>` to lower or raise the relay-enforced cap. `auto` selects Docker, Podman, or nerdctl. The initial OCI path supports stock Pi 0.84.4 with `openrouter/z-ai/glm-5.3-flash`; use `--runtime native` only for advanced compatibility with other setups.
+
+Operators with a registered evaluator pack use `hbench controlled run ... --runtime auto --approve-spend`. Colima and Dory Docker-compatible contexts work through the Docker CLI.
+
 After a ride:
 
 ```bash
@@ -24,7 +35,7 @@ Same installer from a coding agent: see [SKILL.md](./SKILL.md).
 
 | | |
 |---|---|
-| **Status** | v0.5.8 — local Pi models record complete $0 provider/API inference cost |
+| **Status** | v0.5.9 — digest-pinned OCI participant rides |
 | **CLI** | `hbench` |
 | **License** | MIT |
 
@@ -50,7 +61,7 @@ Cost (tokens, wall time, estimated USD) sits next to quality. Fancy workflows th
 
 ```text
 scenario × config  →  run (workspace + snapshot)
-                   →  agent (manual or hb execute)
+                   →  agent (manual or hbench execute)
                    →  patch + telemetry
                    →  independent judges (tests / FAIL_TO_PASS)
                    →  result record
@@ -88,12 +99,14 @@ Manual mode needs no API keys: prepare a workspace, run any agent yourself, `hbe
 
 ## 5-minute loop
 
+`hbench ride` prints one immutable input plan, asks once, executes the model only after `--approve-spend`, judges the result, and writes a local report. Hbench never publishes results unless `hbench publish` is explicitly run.
+
 ```bash
 hbench                     # one suggested command; hbench doctor for the full report
 # paste what it prints, e.g.:
-hbench run -s go-chi-tee-bytes-double-count --harness grok && hbench execute
+hbench ride -s rodeo:js-commander-negative-exp-E@3 --harness pi \
+  --model openrouter/z-ai/glm-5.3-flash --approve-spend
 
-hbench report              # local HTML in ./hb-out — nothing is uploaded
 # optional:
 hbench publish             # upload the latest finished run to agentrodeo.dev
 ```
@@ -115,9 +128,9 @@ hbench run -s zip-password-finder-python-port \
   --harness pi --provider openai --model gpt-5.6-sol --reasoning medium
 ```
 
-`hbench` does not install compilers, language runtimes, harnesses, plugins, skills, or extensions for a ride. Use `hbench doctor -s <scenario>` to see the exact commands and versions that the scenario needs. If a prerequisite is missing or too old, the run stops before setup and tells you what your current `PATH` resolved.
+OCI rides do not use host compilers, language runtimes, harnesses, plugins, skills, or extensions. The digest-pinned environment supplies them. Native compatibility runs still use `hbench doctor -s <scenario>` to check host prerequisites.
 
-Some rides need uncached inputs. Before hbench downloads a pinned repository, a public scenario manifest, or lockfile-pinned project dependencies, it prints the source, immutable ref or checksum, reason, destination, and expected size, then asks `Proceed? [Y/n]`. Approval is stored for that exact fetch-plan digest only. If a URL, ref, checksum, lockfile, destination, or other plan field changes, hbench asks again. In a non-interactive session, approve the printed plan with `hbench fetch approve <digest>`, then rerun the original command.
+Hbench fetches the small public scenario manifest needed to compute the plan. Before it downloads the pinned repository or lockfile-pinned dependencies, it prints one aggregate plan with the source, immutable ref or checksum, reason, destination, and expected size, then asks `Proceed? [Y/n]`. Approval is stored for that exact digest only. If any plan field changes, hbench asks again. In a non-interactive session, pass `--yes` to `hbench ride`, or approve the printed digest with `hbench fetch approve <digest>` and rerun.
 
 ---
 
@@ -127,15 +140,15 @@ Some rides need uncached inputs. Before hbench downloads a pinned repository, a 
 
 - **Scenarios** — real OSS bugfixes (pytest, chi, commander.js, FastAPI stream router, …). Agents see **intent only**; `gold_ref` is judge-side.
 - **Community manifests** — `hbench run -s rodeo:<slug>@<version>` downloads a digest-verified public manifest from Agent Rodeo. Private targets and evaluators never enter the manifest.
-- **Explicit external trust** — path, pack, and Community scenarios require approval of a digest covering the full executable manifest and referenced files. Use `hbench inspect` and `hbench trust`; embedded scenarios stay frictionless.
-- **No surprise installation** — scenario prerequisites are checked, never installed. Network fetches are declared, shown, and separately approved before access.
+- **Explicit external trust** — path and pack scenarios require approval of a digest covering the full executable manifest and referenced files. Use `hbench inspect` and `hbench trust`; published and embedded scenarios stay frictionless.
+- **No surprise installation** — scenario prerequisites are checked, never installed. Repository and dependency downloads are declared and shown in one immutable approval plan before access.
 - **Configs** — baseline and treatment recipes with **pinned harness versions** and models.
 - **Experiments** — YAML matrices (`scenario_ids` × `config_ids` × repeats) under `experiments/`.
 
 ### Execution
 
 - **`hbench execute`** — direct argv launch (no shell interpolation), telemetry parsing, and process-group timeout cleanup.
-- **Local-first runs** — ordinary users choose how to isolate hbench; `hbench sandbox-command` prints a hardened Docker/Podman command and never starts it.
+- **OCI participant rides** — `hbench ride` runs digest-pinned environments with Docker, Podman, or nerdctl; native execution is an explicit compatibility option.
 - **Rooted scenario files** — environment patches and gold overlays cannot traverse or follow symlinks outside their declared roots.
 - **Controlled operator runs** — a trusted operator can validate and execute a private evaluator pack in isolated Docker containers, then upload a signed attestation. This does not run on the Rails host.
 
@@ -143,7 +156,7 @@ Some rides need uncached inputs. Before hbench downloads a pinned repository, a 
 
 - **FAIL_TO_PASS overlay** — pull regression tests from `gold_ref` when the base tree lacks them.
 - **Static HTML** — quality / cost / time / tokens winner chips; artifact links to `patch.diff`, `agent.log`, `dialogue.json`, `snapshot.json`, `judge.json`, `run.json`.
-- **Experiment reports** — `hb report --from experiments/foo.yaml` → `reports/exp-<id>.html`.
+- **Experiment reports** — `hbench report --from experiments/foo.yaml` → `reports/exp-<id>.html`.
 
 ### What is intentionally *not* here yet
 
@@ -161,6 +174,7 @@ Hosted execution is not part of v0.4. Controlled runs are started manually on a 
 | `hbench version` | Print `hbench <ver> (go)` |
 | `hbench list scenarios` | Official corpus from the home cache |
 | `hbench list runs` | Local run IDs, statuses, setup labels, and safe next actions |
+| `hbench ride -s <id> --harness <name> --approve-spend` | Prepare, execute, judge, and report in one command |
 | `hbench run -s <id> --harness <name>` | New pending run + workspace |
 | `hbench execute [run_id]` | Headless harness, then finish/judge (spends tokens) |
 | `hbench finish [run_id]` | Capture patch, judge, save. Stay in the start directory. `--force` to re-judge. |
@@ -209,7 +223,7 @@ hbench controlled run \
   --scenario rodeo:example@1 \
   --pack ../agentrodeo-evaluators/example/v1 \
   --key-id <registered-key-id> \
-  --relay-image docker.io/claytonlz/hbench-model-relay@sha256:a172b484c2e3491fb4c064652c920ab9e863503bee9653f23e277958efac4a7a
+  --relay-image docker.io/claytonlz/agent-rodeo-model-relay@sha256:bcb8fa0938bc93d1c029d21978b7e8339ed24adf179109d5a79f48a5a6958dfa
 ```
 
 Controlled protocol v3 requires dependency-complete pinned images. Setup and evaluator containers have networking disabled. The agent can reach only an authenticated credential relay on an internal network; the relay alone has a dedicated egress network, and the real provider secret is mounted from a mode-0600 temporary file. The signed upload contains the patch, public judge report, digests, and telemetry; raw agent logs remain private on the operator machine and should be removed after 90 days.
@@ -292,7 +306,7 @@ repeats: 1
 
 ## Budget guards
 
-Configs declare `budget:`. `hb execute` enforces non-null fields:
+Configs declare `budget:`. `hbench execute` enforces non-null fields:
 
 | Limit | Behavior |
 |-------|----------|
@@ -326,7 +340,7 @@ Dialogue → `results/<run_id>/dialogue.json`. Proxy $ is tracked separately fro
 ## Reports & artifacts
 
 ```bash
-hb report          # ./hb-out/report.html — local only, nothing uploaded
+hbench report          # ./hb-out/report.html — local only, nothing uploaded
 ```
 
 Run records live under `./hb-out/<run_id>/` (`run.json`, `patch.diff`, `snapshot.json`, …). Official YAML is cached in the home data dir. Older `results/` and `reports/` trees in this repo are leftover personal experiment output.

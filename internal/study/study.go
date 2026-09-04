@@ -67,7 +67,7 @@ type Arm struct {
 }
 
 var axes = []string{"harness", "harness_version", "provider", "model", "reasoning", "workflow", "skills", "extensions", "plugins", "tools", "subagent_topology", "environment", "network"}
-var publishedScenarioID = regexp.MustCompile(`^rodeo:[a-z0-9]+(?:-[a-z0-9]+)*@[1-9][0-9]*$`)
+var publishedScenarioID = regexp.MustCompile(`^rodeo:[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*@[1-9][0-9]*$`)
 
 func Load(path string) (Manifest, error) {
 	raw, err := os.ReadFile(path)

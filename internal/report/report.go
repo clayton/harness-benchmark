@@ -11,7 +11,13 @@ import (
 	"github.com/clayton/harness-benchmark/internal/paths"
 )
 
-func Write(l paths.Layout) (string, int, error) {
+func Write(l paths.Layout) (string, int, error) { return write(l, "", nil) }
+
+func WriteStudyRuns(l paths.Layout, studyID string, runIDs map[string]bool) (string, int, error) {
+	return write(l, studyID, runIDs)
+}
+
+func write(l paths.Layout, studyID string, runIDs map[string]bool) (string, int, error) {
 	entries, err := os.ReadDir(l.OutDir)
 	if err != nil {
 		return "", 0, err
@@ -25,6 +31,15 @@ func Write(l paths.Layout) (string, int, error) {
 		r, err := loop.Load(l, e.Name())
 		if err != nil {
 			continue
+		}
+		if studyID != "" {
+			if runIDs != nil && !runIDs[r.ID] {
+				continue
+			}
+			profile, _ := r.Metadata["profile"].(map[string]any)
+			if profile == nil || profile["study_id"] != studyID {
+				continue
+			}
 		}
 		n++
 		cards = append(cards, renderRun(r))
@@ -47,10 +62,15 @@ func Write(l paths.Layout) (string, int, error) {
   a { color: inherit; }
 </style>
 <h1>hbench report</h1>
-<p class="muted">%d run(s) in hb-out. Nothing was uploaded.</p>
+<p class="muted">%d run(s) in hb-out%s. Nothing was uploaded.</p>
 %s
 <p class="muted">Optional: <code>hbench publish</code> uploads a finished run. It is not automatic.</p>
-`, n, body)
+`, n, func() string {
+		if studyID == "" {
+			return ""
+		}
+		return " for study " + html.EscapeString(studyID)
+	}(), body)
 	if err := os.MkdirAll(l.OutDir, 0o755); err != nil {
 		return "", n, err
 	}

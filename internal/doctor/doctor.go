@@ -182,7 +182,7 @@ func Suggest(s Snapshot) Suggestion {
 	if len(out.Harnesses) > 0 {
 		h := out.Harnesses[0].Name
 		out.Kind = "execute"
-		out.Command = fmt.Sprintf("hbench run -s %s --harness %s && hbench execute", sc.ID, h)
+		out.Command = fmt.Sprintf("hbench ride -s %s --harness %s --approve-spend", sc.ID, h)
 		return out
 	}
 	out.Kind = "prepare"

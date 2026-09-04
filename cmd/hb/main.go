@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -23,7 +25,10 @@ import (
 	"github.com/clayton/harness-benchmark/skills"
 )
 
-const version = "0.5.8"
+const (
+	version           = "0.5.9"
+	defaultRelayImage = "docker.io/claytonlz/agent-rodeo-model-relay@sha256:bcb8fa0938bc93d1c029d21978b7e8339ed24adf179109d5a79f48a5a6958dfa"
+)
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -50,7 +55,9 @@ func run(args []string) error {
 	case "list":
 		return cmdList(args[1:])
 	case "run":
-		return cmdRun(args[1:])
+		return cmdRunMode(args[1:], false)
+	case "ride":
+		return cmdRunMode(args[1:], true)
 	case "execute":
 		return cmdExecute(args[1:])
 	case "finish":
@@ -109,6 +116,9 @@ func cmdControlledAction(action string, args []string) error {
 	keyPath := fs.String("key", defaultRunnerKey(), "runner private key path")
 	keyID := fs.String("key-id", "", "registered runner key ID")
 	relayImage := fs.String("relay-image", os.Getenv("HB_RELAY_IMAGE"), "pinned credential relay image")
+	runtimeName := fs.String("runtime", os.Getenv("HB_RUNTIME"), "OCI runtime: auto, docker, podman, or nerdctl")
+	approveSpend := fs.Bool("approve-spend", false, "confirm this credential-backed run may spend money")
+	yes := fs.Bool("yes", false, "approve the displayed immutable plan")
 	artifactDir := fs.String("artifacts", filepath.Join(layout().OutDir, "controlled"), "private artifact directory")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -116,8 +126,16 @@ func cmdControlledAction(action string, args []string) error {
 	if *scenarioID == "" || *packPath == "" || *keyID == "" {
 		return fmt.Errorf("--scenario, --pack, and --key-id are required")
 	}
+	if action == "run" && !*approveSpend {
+		return fmt.Errorf("controlled run requires --approve-spend; this run can use model credentials and incur provider charges")
+	}
+	rt, err := controlled.SelectRuntime(*runtimeName)
+	if err != nil {
+		return err
+	}
+	os.Setenv("HB_RUNTIME", rt.Name)
 	l := layout()
-	scenario, err := resolveScenarioWithConsent(l, "", *scenarioID)
+	scenario, err := corpus.Resolve(l.ScenariosDir(), "", *scenarioID)
 	if err != nil {
 		return err
 	}
@@ -129,12 +147,12 @@ func cmdControlledAction(action string, args []string) error {
 		return fmt.Errorf("evaluator pack does not match scenario %s", scenario.ID)
 	}
 	minutes := 45
-	if value, ok := pack.Budget["max_minutes"].(int); ok {
-		minutes = value
+	if value, ok := controlledBudgetNumber(pack.Budget, "max_minutes"); ok {
+		minutes = int(value)
 	}
-	ctx, cancel := controlled.RunTimeout(minutes)
-	defer cancel()
 	if action == "validate" {
+		ctx, cancel := controlled.RunTimeout(minutes)
+		defer cancel()
 		result, err := controlled.Validate(ctx, scenario, pack, *packPath)
 		if err != nil {
 			return err
@@ -157,7 +175,42 @@ func cmdControlledAction(action string, args []string) error {
 	if *relayImage == "" || !controlled.PinnedImage(*relayImage) {
 		return fmt.Errorf("--relay-image must be pinned by sha256 digest")
 	}
-	result, err := controlled.Run(ctx, scenario, pack, *packPath, *relayImage, *artifactDir)
+	inputPlan, err := loop.InputPlan(l, scenario, false)
+	if err != nil {
+		return err
+	}
+	items := append([]fetchconsent.Item(nil), inputPlan.Items...)
+	budgetJSON, _ := json.Marshal(pack.Budget)
+	items = append(items,
+		fetchconsent.Item{Kind: "Scenario contract", Source: scenario.ID, Ref: scenario.ManifestDigest, Reason: "immutable controlled definition", Destination: l.ScenariosDir(), Size: "metadata only"},
+		fetchconsent.Item{Kind: "Evaluator pack", Source: *packPath, Ref: packDigest, Checksum: "sha256:" + packDigest, Reason: "private judge and execution contract", Destination: *artifactDir, Size: "local files"},
+		imagePlanItem("OCI environment", pack.EnvironmentImageDigest, rt.Name+" image store", "sealed scenario tools and dependencies"),
+		imagePlanItem("Credential relay", *relayImage, rt.Name+" image store", "isolated model API access"),
+		fetchconsent.Item{Kind: "Model execution", Source: pack.Relay.Upstream, Ref: pack.Execution.Model, Reason: "model inference; provider charges apply", Destination: "credential relay", Size: fmt.Sprintf("at most %d minutes", minutes)},
+		fetchconsent.Item{Kind: "Spend boundary", Source: string(budgetJSON), Reason: "immutable controlled-run limits", Destination: "credential relay", Size: "metadata only"},
+		fetchconsent.Item{Kind: "Environment variable", Source: pack.Relay.SecretEnv, Reason: "provider authentication", Destination: "credential relay secret file", Size: "value is not recorded"},
+	)
+	fullPlan := fetchconsent.New(items...)
+	if *yes {
+		err = approveFetchPlan(l, fullPlan)
+	} else {
+		err = authorizeFetch(l, fullPlan)
+	}
+	if err != nil {
+		return err
+	}
+	if err := loop.PrepareApprovedInputs(l, scenario, false); err != nil {
+		return err
+	}
+	workspaceID := loop.NewID()
+	workspace, err := loop.PrepareWorktree(l, scenario, workspaceID, false)
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(l.RunDir(workspaceID))
+	ctx, cancel := controlled.RunTimeout(minutes)
+	defer cancel()
+	result, err := controlled.Run(ctx, scenario, pack, *packPath, *relayImage, *artifactDir, workspace)
 	if err != nil {
 		return err
 	}
@@ -177,6 +230,17 @@ func cmdControlledAction(action string, args []string) error {
 	return nil
 }
 
+func controlledBudgetNumber(budget map[string]any, key string) (float64, bool) {
+	switch value := budget[key].(type) {
+	case int:
+		return float64(value), value > 0
+	case float64:
+		return value, value > 0
+	default:
+		return 0, false
+	}
+}
+
 func defaultRunnerKey() string {
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".config", "hb", "runner-ed25519.pem")
@@ -192,6 +256,7 @@ Commands:
   hbench version
   hbench list scenarios
   hbench list runs
+  hbench ride -s <id> --harness <name> --approve-spend
   hbench run -s <id> --harness <name>
   hbench execute [run_id]
   hbench finish [run_id] [--force]
@@ -200,8 +265,8 @@ Commands:
   hbench inspect -s <scenario>
   hbench trust -s <scenario>
   hbench sandbox-command -s <scenario> --harness <name> --image <name@sha256:digest>
-  hbench controlled keygen|validate|run
-  hbench study validate|plan|run|status|publish STUDY.yaml
+  hbench controlled keygen|validate|run [--runtime auto|docker|podman|nerdctl]
+  hbench study validate|plan|run|status|report|publish STUDY.yaml
   hbench callout create STUDY.yaml --statement "..."
   hbench callout challenge <url>
   hbench skill install [--target DIR]
@@ -249,12 +314,34 @@ func authorizeFetch(l paths.Layout, plan fetchconsent.Plan) error {
 		return fmt.Errorf("network fetch requires approval; run: hbench fetch approve %s\nthen rerun the original command", digest)
 	}
 	fmt.Print("Proceed? [Y/n] ")
-	answer, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-	answer = strings.TrimSpace(strings.ToLower(answer))
-	if answer != "" && answer != "y" && answer != "yes" {
+	answer, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if !approvedFetchAnswer(answer, err) {
 		return fmt.Errorf("fetch declined; hbench did not access the network")
 	}
 	return fetchconsent.Approve(l.DataDir, digest)
+}
+
+func approveFetchPlan(l paths.Layout, plan fetchconsent.Plan) error {
+	if fetchconsent.Approved(l.DataDir, plan.Digest()) {
+		return nil
+	}
+	if err := fetchconsent.SavePlan(l.DataDir, plan); err != nil {
+		return err
+	}
+	fmt.Print(fetchconsent.Format(plan))
+	if err := fetchconsent.Approve(l.DataDir, plan.Digest()); err != nil {
+		return err
+	}
+	fmt.Println("Approved by --yes; approval applies only to this immutable plan.")
+	return nil
+}
+
+func approvedFetchAnswer(answer string, err error) bool {
+	if err != nil {
+		return false
+	}
+	answer = strings.TrimSpace(strings.ToLower(answer))
+	return answer == "" || answer == "y" || answer == "yes"
 }
 
 func cmdSkill(args []string) error {
@@ -347,15 +434,7 @@ func cmdSuggest() error {
 			return nil
 		}
 	}
-	sug, err := probeSuggestion()
-	if err != nil {
-		return err
-	}
-	if sug.Command == "" {
-		fmt.Println("hbench doctor")
-		return nil
-	}
-	fmt.Println(sug.Command)
+	fmt.Println("hbench ride -s rodeo:js-commander-negative-exp-E@3 --harness pi --model openrouter/z-ai/glm-5.3-flash --approve-spend")
 	return nil
 }
 
@@ -373,7 +452,7 @@ func cmdDoctor(args []string) error {
 	fmt.Print(doctor.Format(sug))
 	if *scenarioID != "" {
 		l := layout()
-		sc, err := resolveScenarioWithConsent(l, "", *scenarioID)
+		sc, err := corpus.Resolve(l.ScenariosDir(), "", *scenarioID)
 		if err != nil {
 			return err
 		}
@@ -452,11 +531,15 @@ func cmdList(args []string) error {
 	return nil
 }
 
-func cmdRun(args []string) error {
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+func cmdRunMode(args []string, ride bool) error {
+	command := "run"
+	if ride {
+		command = "ride"
+	}
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
 	fs.SetOutput(os.Stdout)
 	fs.Usage = func() {
-		fmt.Fprint(os.Stdout, `hbench run -s <scenario> --harness <name>
+		fmt.Fprintf(os.Stdout, `hbench %s -s <scenario> --harness <name>
 
   -s, --scenario   official scenario id, or a path to a .yaml
   --from           extra directory of scenario YAML (optional packs)
@@ -465,9 +548,14 @@ func cmdRun(args []string) error {
   --model          model id (pi: grok-4.6 uses xAI; x-ai/grok-4.6 uses OpenRouter)
   --reasoning      default, off, minimal, low, medium, high, xhigh, max, or ultra
   --thinking       alias for --reasoning
-  --no-setup       skip setup commands
+  --runtime        ride runtime: auto, docker, podman, nerdctl, or native
+  --relay-image    digest-pinned credential relay image
+  --no-setup       skip setup commands in native mode
+  --yes            approve the displayed immutable ride plan
+  --approve-spend  allow ride to execute the model
+  --max-usd        OCI relay spend cap (default 1.00 USD)
   --trust-scenario approve this exact external scenario digest for this run
-`)
+`, command)
 	}
 	scenario := fs.String("s", "", "scenario id")
 	from := fs.String("from", "", "extra scenario directory")
@@ -476,7 +564,16 @@ func cmdRun(args []string) error {
 	model := fs.String("model", "", "model id")
 	reasoning := fs.String("reasoning", "", "reasoning level")
 	fs.StringVar(reasoning, "thinking", "", "alias for --reasoning")
-	noSetup := fs.Bool("no-setup", false, "skip setup commands")
+	runtimeDefault := "native"
+	if ride {
+		runtimeDefault = "auto"
+	}
+	runtimeName := fs.String("runtime", runtimeDefault, "ride runtime: auto, docker, podman, nerdctl, or native")
+	relayImage := fs.String("relay-image", defaultRelayImage, "digest-pinned credential relay image")
+	noSetup := fs.Bool("no-setup", false, "skip setup commands in native mode")
+	yes := fs.Bool("yes", false, "approve the displayed immutable ride plan")
+	approveSpend := fs.Bool("approve-spend", false, "allow ride to execute the model")
+	maxUSD := fs.Float64("max-usd", 1, "OCI relay spend cap in USD")
 	trustScenario := fs.String("trust-scenario", "", "approved external scenario sha256 digest")
 	fs.StringVar(scenario, "scenario", "", "scenario id")
 	if err := fs.Parse(args); err != nil {
@@ -487,14 +584,20 @@ func cmdRun(args []string) error {
 	}
 	if *scenario == "" || *harness == "" {
 		fs.Usage()
-		return fmt.Errorf("usage: hbench run -s <scenario> --harness <name>")
+		return fmt.Errorf("usage: hbench %s -s <scenario> --harness <name>", command)
+	}
+	if ride && !*approveSpend {
+		return fmt.Errorf("hbench ride requires --approve-spend because it executes the model")
+	}
+	if ride && *harness == "manual" {
+		return fmt.Errorf("hbench ride requires a headless harness; use hbench run for manual work")
 	}
 	printCLIIdentity()
 	l := layout()
 	if err := ensureCorpus(l); err != nil {
 		return err
 	}
-	sc, err := resolveScenarioWithConsent(l, *from, *scenario)
+	sc, err := corpus.Resolve(l.ScenariosDir(), *from, *scenario)
 	if err != nil {
 		return err
 	}
@@ -506,6 +609,15 @@ func cmdRun(args []string) error {
 	profile, err := loop.NormalizeDirectProfile(loop.Profile{Harness: *harness, Provider: *provider, Model: *model, Reasoning: *reasoning})
 	if err != nil {
 		return err
+	}
+	if ride && *runtimeName != "native" {
+		if *noSetup {
+			return fmt.Errorf("--no-setup is available only with --runtime native")
+		}
+		return cmdOCIRide(l, sc, profile, *runtimeName, *relayImage, *maxUSD, *yes)
+	}
+	if !ride && *runtimeName != "native" {
+		return fmt.Errorf("hbench run is the native compatibility path; use hbench ride --runtime %s", *runtimeName)
 	}
 	if profile.Harness != "manual" {
 		identity, err := loop.DetectHarnessIdentity(profile.Harness)
@@ -526,7 +638,11 @@ func cmdRun(args []string) error {
 		}
 		return err
 	}
-	if err := loop.PrepareInputs(l, sc, !*noSetup, func(plan fetchconsent.Plan) error { return authorizeFetch(l, plan) }); err != nil {
+	authorize := func(plan fetchconsent.Plan) error { return authorizeFetch(l, plan) }
+	if *yes {
+		authorize = func(plan fetchconsent.Plan) error { return approveFetchPlan(l, plan) }
+	}
+	if err := loop.PrepareInputs(l, sc, !*noSetup, authorize); err != nil {
 		return err
 	}
 	rec, err := loop.CreateRunWithProfile(l, sc, profile, !*noSetup)
@@ -550,12 +666,170 @@ func cmdRun(args []string) error {
 	}
 	fmt.Printf("  workspace: %s\n", rec.Worktree)
 	fmt.Printf("  prompt:    %s\n", filepath.Join(rec.Worktree, "HB_PROMPT.txt"))
+	if ride {
+		return cmdExecute([]string{rec.ID})
+	}
 	if loop.HeadlessCommand(*harness) != "" {
 		fmt.Printf("  next:      hbench execute %s\n", rec.ID)
 		fmt.Println("             Run it here or anywhere inside the printed workspace.")
 	} else {
 		fmt.Printf("  next:      work in the workspace, then hbench finish %s\n", rec.ID)
 	}
+	return nil
+}
+
+func cmdOCIRide(l paths.Layout, sc corpus.Scenario, profile loop.Profile, runtimeName, relayImage string, maxUSD float64, yes bool) error {
+	if profile.Harness != "pi" || profile.Provider != "openrouter" || profile.Model != "openrouter/z-ai/glm-5.3-flash" {
+		return fmt.Errorf("OCI rides currently require --harness pi --model openrouter/z-ai/glm-5.3-flash")
+	}
+	if maxUSD < 0.02 {
+		return fmt.Errorf("--max-usd must be at least 0.02 for the bounded model request")
+	}
+	if !controlled.PinnedImage(sc.EnvironmentImageDigest) {
+		return fmt.Errorf("scenario %s has no digest-pinned OCI environment; use --runtime native only as an advanced compatibility path", sc.ID)
+	}
+	if !controlled.PinnedImage(sc.RelayImageDigest) {
+		return fmt.Errorf("scenario %s has no digest-pinned credential relay", sc.ID)
+	}
+	if relayImage != sc.RelayImageDigest {
+		return fmt.Errorf("--relay-image must match the immutable scenario version")
+	}
+	rt, err := controlled.SelectRuntime(runtimeName)
+	if err != nil {
+		return err
+	}
+	os.Setenv("HB_RUNTIME", rt.Name)
+	plan, err := loop.InputPlan(l, sc, false)
+	if err != nil {
+		return err
+	}
+	items := append([]fetchconsent.Item(nil), plan.Items...)
+	items = append(items,
+		fetchconsent.Item{Kind: "Scenario contract", Source: sc.ID, Ref: sc.ManifestDigest, Reason: "immutable ride definition", Destination: l.ScenariosDir(), Size: "metadata only"},
+		imagePlanItem("OCI environment", sc.EnvironmentImageDigest, rt.Name+" image store", "sealed scenario tools and dependencies"),
+		imagePlanItem("Credential relay", relayImage, rt.Name+" image store", "isolated model API access"),
+		fetchconsent.Item{Kind: "Model execution", Source: "https://openrouter.ai", Ref: profile.Model, Reason: "model inference; provider charges apply", Destination: "credential relay", Size: "at most 45 minutes"},
+		fetchconsent.Item{Kind: "Reasoning level", Source: profile.Reasoning, Reason: "immutable model execution setting", Destination: "agent container", Size: "metadata only"},
+		fetchconsent.Item{Kind: "Spend cap", Source: fmt.Sprintf("%.2f USD", maxUSD), Ref: "100000 request bytes; 32768 output tokens; 0.075/0.25 USD per million input/output tokens", Reason: "relay rejects requests that exceed the approved bound", Destination: "credential relay", Size: "0.02 USD reserved per request"},
+		fetchconsent.Item{Kind: "Environment variable", Source: "OPENROUTER_API_KEY", Reason: "provider authentication", Destination: "credential relay secret file", Size: "value is not recorded"},
+	)
+	fullPlan := fetchconsent.New(items...)
+	if yes {
+		err = approveFetchPlan(l, fullPlan)
+	} else {
+		err = authorizeFetch(l, fullPlan)
+	}
+	if err != nil {
+		return err
+	}
+	if err := loop.PrepareApprovedInputs(l, sc, false); err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(l.OutDir, 0o755); err != nil {
+		return err
+	}
+	evaluator, err := os.MkdirTemp(l.OutDir, ".hbench-public-evaluator-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(evaluator)
+	goldDir := filepath.Join(evaluator, "gold")
+	goldFiles, err := loop.ExportGoldTests(l, sc, goldDir)
+	if err != nil {
+		return err
+	}
+	commands := make([]string, 0, len(goldFiles)+len(sc.Acceptance.BuildCommands)+len(sc.Acceptance.TestCommands))
+	for _, file := range goldFiles {
+		source := path.Join("/evaluator/gold", filepath.ToSlash(file))
+		destination := path.Join("/workspace", filepath.ToSlash(file))
+		commands = append(commands, "mkdir -p "+shellQuote(path.Dir(destination))+" && cat "+shellQuote(source)+" > "+shellQuote(destination))
+	}
+	commands = append(commands, sc.Acceptance.BuildCommands...)
+	commands = append(commands, sc.Acceptance.TestCommands...)
+	if len(commands) == 0 {
+		return fmt.Errorf("scenario %s has no public evaluator commands", sc.ID)
+	}
+	modelID := strings.TrimPrefix(profile.Model, profile.Provider+"/")
+	pack := controlled.Pack{
+		ScenarioSlug: strings.SplitN(sc.ID, "@", 2)[0], ScenarioVersion: sc.Version,
+		EnvironmentImageDigest: sc.EnvironmentImageDigest, RelayImageDigest: relayImage, ProtocolID: "controlled-v3",
+		EvaluatorCommands: commands,
+		Execution:         controlled.Execution{Harness: "pi", HarnessVersion: "0.84.4", Model: profile.Model, Command: "hbench-pi-openrouter", Environment: map[string]string{"HOME": "/tmp/hbench-home", "HB_MODEL": modelID, "HB_REASONING": profile.Reasoning}},
+		Relay: controlled.Relay{
+			Upstream: "https://openrouter.ai", BaseURLEnv: "HB_MODEL_BASE_URL", SecretEnv: "OPENROUTER_API_KEY", AuthHeader: "Authorization", AuthScheme: "Bearer", DummyKeyEnv: "HB_MODEL_API_KEY",
+			AllowedModel: modelID, MaxRequestUSD: 0.02, MaxRequestBytes: 100000, MaxOutputTokens: 32768,
+			MaxPromptUSDPerMillion: 0.075, MaxCompletionUSDPerMillion: 0.25,
+		},
+		Budget: map[string]any{"max_minutes": 45, "max_usd": maxUSD},
+	}
+	runID := loop.NewID()
+	artifactDir := l.RunDir(runID)
+	workspace, err := loop.PrepareWorktree(l, sc, runID, false)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := controlled.RunTimeout(45)
+	defer cancel()
+	result, runErr := controlled.Run(ctx, sc, pack, evaluator, relayImage, artifactDir, workspace)
+	if runErr != nil {
+		return runErr
+	}
+	return saveOCIRide(l, sc, profile, runID, rt, relayImage, maxUSD, result)
+}
+
+func imagePlanItem(kind, image, destination, reason string) fetchconsent.Item {
+	parts := strings.SplitN(image, "@", 2)
+	return fetchconsent.Item{Kind: kind, Source: parts[0], Ref: parts[1], Checksum: parts[1], Reason: reason, Destination: destination, Size: "unknown"}
+}
+
+func saveOCIRide(l paths.Layout, sc corpus.Scenario, profile loop.Profile, runID string, rt controlled.Runtime, relayImage string, maxUSD float64, result controlled.RunResult) error {
+	run, ok := result.Payload["run"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("invalid OCI run result")
+	}
+	status, _ := run["status"].(string)
+	telemetry, _ := run["telemetry"].(loop.Telemetry)
+	passed, _ := result.Report["passed"].(bool)
+	judge := loop.JudgeScore{Name: "acceptance_tests", Score: 0, Passed: &passed, Notes: "Containerized public evaluator failed."}
+	if passed {
+		judge.Score = 1
+		judge.Notes = "Containerized public evaluator passed."
+	}
+	record := loop.RunRecord{
+		ID: runID, ScenarioID: sc.ID, ConfigID: "oci-" + rt.Name, Status: status, Worktree: l.Worktree(runID),
+		Harness: profile.Harness, HarnessVersion: "0.84.4", Model: profile.Model,
+		Judges: []loop.JudgeScore{judge}, Telemetry: telemetry, CreatedAt: loop.Now(), FinishedAt: loop.Now(),
+	}
+	if err := loop.WriteFileAtomic(filepath.Join(l.RunDir(runID), "patch.diff"), []byte(result.Patch), 0o600); err != nil {
+		return err
+	}
+	promptDigest := sha256.Sum256([]byte(strings.TrimSpace(sc.Prompt)))
+	snapshot := map[string]any{
+		"prompt_sha256_16": fmt.Sprintf("%x", promptDigest)[:16],
+		"repo":             map[string]any{"base_ref": sc.Repo.BaseRef, "gold_ref": sc.Repo.GoldRef},
+		"config": map[string]any{
+			"id": record.ConfigID, "harness": profile.Harness, "harness_version": record.HarnessVersion,
+			"provider": profile.Provider, "model": profile.Model, "reasoning": profile.Reasoning,
+			"workflow": "baseline", "interaction": "unattended", "budget": map[string]any{"max_minutes": 45, "max_usd": maxUSD},
+			"environment": map[string]any{"image_digest": sc.EnvironmentImageDigest}, "relay_image_digest": relayImage, "network": "relay-only", "runtime": rt,
+		},
+	}
+	if raw, err := json.MarshalIndent(snapshot, "", "  "); err != nil {
+		return err
+	} else if err := loop.WriteFileAtomic(filepath.Join(l.RunDir(runID), "snapshot.json"), append(raw, '\n'), 0o600); err != nil {
+		return err
+	}
+	if raw, err := os.ReadFile(result.LogPath); err == nil {
+		_ = loop.WriteFileAtomic(filepath.Join(l.RunDir(runID), "agent.log"), raw, 0o600)
+	}
+	if err := loop.Save(l, record); err != nil {
+		return err
+	}
+	if err := loop.SetLatest(l, runID); err != nil {
+		return err
+	}
+	printScored(l, record, false)
 	return nil
 }
 
@@ -615,28 +889,8 @@ func resolveScenarioFlag(args []string, command string) (paths.Layout, corpus.Sc
 	if err := ensureCorpus(l); err != nil {
 		return l, corpus.Scenario{}, err
 	}
-	sc, err := resolveScenarioWithConsent(l, *from, *scenario)
+	sc, err := corpus.Resolve(l.ScenariosDir(), *from, *scenario)
 	return l, sc, err
-}
-
-func resolveScenarioWithConsent(l paths.Layout, from, identifier string) (corpus.Scenario, error) {
-	if strings.HasPrefix(identifier, "rodeo:") {
-		remoteID := strings.TrimPrefix(identifier, "rodeo:")
-		source, destination, cached, err := corpus.RodeoManifestLocation(l.ScenariosDir(), remoteID)
-		if err != nil {
-			return corpus.Scenario{}, err
-		}
-		if !cached {
-			plan := fetchconsent.New(fetchconsent.Item{
-				Kind: "Agent Rodeo manifest", Source: source, Ref: remoteID,
-				Reason: "public benchmark contract", Destination: destination, Size: "at most 1 MiB",
-			})
-			if err := authorizeFetch(l, plan); err != nil {
-				return corpus.Scenario{}, err
-			}
-		}
-	}
-	return corpus.Resolve(l.ScenariosDir(), from, identifier)
 }
 
 func printScenarioInspection(sc corpus.Scenario, digest string) {

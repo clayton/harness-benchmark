@@ -246,7 +246,7 @@ func TestBuildPayloadPublishesFrozenStudyBinding(t *testing.T) {
 	if err := loop.Save(l, loop.RunRecord{ID: id, ScenarioID: "task", Status: "completed", Worktree: worktree, Harness: "codex", Model: "sol", Judges: []loop.JudgeScore{{Name: "test"}}, CreatedAt: loop.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	snapshot := `{"study":{"id":"fight","contract_digest":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","arm_id":"a","scenario_id":"rodeo:task@1","repeat":2,"scenario_digest":"ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"},"config":{"id":"a","harness":"codex","harness_version":"codex-cli 1","model":"sol","workflow":"baseline","skills":[],"interaction":"unattended","judge_protocol":"scenario-default","budget":{"max_minutes_per_run":45}}}`
+	snapshot := `{"study":{"id":"fight","contract_digest":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd","arm_id":"a","scenario_id":"rodeo:task@1","repeat":2,"scenario_digest":"ssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssssss"},"config":{"id":"a","harness":"codex","harness_version":"codex-cli 1","model":"sol","workflow":"baseline","skills":[],"interaction":"unattended","judge_protocol":"scenario-default","budget":{"max_minutes_per_run":45},"runtime":{"name":"docker","version":"29","architecture":"arm64"}}}`
 	if err := os.WriteFile(filepath.Join(l.RunDir(id), "snapshot.json"), []byte(snapshot), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -260,7 +260,7 @@ func TestBuildPayloadPublishesFrozenStudyBinding(t *testing.T) {
 		t.Fatalf("study binding=%+v", binding)
 	}
 	config := publicSnapshot["config"].(map[string]any)
-	if config["judge_protocol"] != "scenario-default" || config["harness_version"] != "codex-cli 1" {
+	if config["judge_protocol"] != "scenario-default" || config["harness_version"] != "codex-cli 1" || config["runtime"].(map[string]any)["name"] != "docker" {
 		t.Fatalf("study config=%+v", config)
 	}
 }

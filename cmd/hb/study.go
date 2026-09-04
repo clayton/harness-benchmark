@@ -19,6 +19,7 @@ import (
 	"github.com/clayton/harness-benchmark/internal/loop"
 	"github.com/clayton/harness-benchmark/internal/paths"
 	"github.com/clayton/harness-benchmark/internal/publish"
+	"github.com/clayton/harness-benchmark/internal/report"
 	studycontract "github.com/clayton/harness-benchmark/internal/study"
 	"gopkg.in/yaml.v3"
 )
@@ -39,9 +40,13 @@ type studyCell struct {
 
 func cmdStudy(args []string) error {
 	if len(args) < 2 {
-		return fmt.Errorf("usage: hbench study validate|plan|run|status|publish STUDY.yaml")
+		return fmt.Errorf("usage: hbench study validate|plan|run|status|report|publish STUDY.yaml")
 	}
 	action, path := args[0], args[1]
+	if path == "--help" || path == "-h" {
+		fmt.Println("usage: hbench study validate|plan|run|status|report|publish STUDY.yaml")
+		return nil
+	}
 	m, err := studycontract.Load(path)
 	if err != nil {
 		return err
@@ -54,6 +59,8 @@ func cmdStudy(args []string) error {
 		return printStudyPlan(m)
 	case "status":
 		return printStudyStatus(m)
+	case "report":
+		return writeStudyReport(m)
 	case "run":
 		return runStudy(m, args[2:])
 	case "publish":
@@ -63,21 +70,43 @@ func cmdStudy(args []string) error {
 	}
 }
 
+func writeStudyReport(m studycontract.Manifest) error {
+	s, err := loadStudyState(m)
+	if err != nil {
+		return err
+	}
+	runIDs := make(map[string]bool, len(s.Completed))
+	for _, cell := range s.Completed {
+		runIDs[cell.RunID] = true
+	}
+	path, n, err := report.WriteStudyRuns(layout(), m.ID, runIDs)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Wrote %s (%d study runs). Nothing was uploaded.\n", path, n)
+	return nil
+}
+
 func printStudyPlan(m studycontract.Manifest) error {
 	fmt.Printf("%s\nmode: %s\npublishable: yes\ncontract: %s\n", m.Question, m.ComparisonMode, m.Digest())
 	fmt.Printf("matrix: %d arms × %d scenarios × %d repeats = %d runs\n", len(m.Arms), len(m.Scenarios), m.Repeats, m.RunCount())
 	fmt.Printf("changed axes: %s\n", strings.Join(m.DifferingAxes(), ", "))
+	fmt.Printf("confounds: held constant except %s\n", strings.Join(m.DifferingAxes(), ", "))
 	for _, a := range m.Arms {
-		fmt.Printf("  %s: %s / %s", a.ID, a.Harness, a.Model)
-		if len(a.Plugins) > 0 {
-			fmt.Printf(" / plugins %s", strings.Join(a.Plugins, ", "))
-		}
-		fmt.Println()
+		fmt.Printf("  %s: harness=%s@%s provider=%s model=%s reasoning=%s workflow=%s environment=%s network=%s skills=%s extensions=%s plugins=%s tools=%s subagents=%s\n",
+			a.ID, a.Harness, a.Version, a.Provider, a.Model, a.Reasoning, a.Workflow, a.Environment, a.Network,
+			strings.Join(a.Skills, ","), strings.Join(a.Extensions, ","), strings.Join(a.Plugins, ","), strings.Join(a.Tools, ","), a.Subagents)
 	}
 	if m.Budget.MaxUSDTotal != nil {
-		fmt.Printf("post-run spend stop threshold: $%.2f (one run can overshoot)\n", *m.Budget.MaxUSDTotal)
+		fmt.Printf("total spend stop threshold: $%.2f (one run can overshoot)\n", *m.Budget.MaxUSDTotal)
 	} else {
-		fmt.Println("post-run spend stop threshold: not declared")
+		fmt.Println("total spend stop threshold: not declared")
+	}
+	if m.Budget.MaxUSDPerRun != nil {
+		fmt.Printf("per-run spend limit: $%.2f\n", *m.Budget.MaxUSDPerRun)
+	}
+	if m.Budget.MaxTokens != nil {
+		fmt.Printf("per-run token limit: %d\n", *m.Budget.MaxTokens)
 	}
 	fmt.Printf("per-run timeout: %d minutes\n", m.Budget.MaxMinutes)
 	return nil
@@ -186,7 +215,8 @@ func runStudy(m studycontract.Manifest, args []string) error {
 		}
 		arm := findArm(m, c.Arm)
 		frozenScenario := findScenario(m, c.Scenario)
-		sc, err := resolveScenarioWithConsent(layout(), "", c.Scenario)
+		l := layout()
+		sc, err := corpus.Resolve(l.ScenariosDir(), "", c.Scenario)
 		if err != nil {
 			return err
 		}
@@ -234,7 +264,7 @@ func runStudy(m studycontract.Manifest, args []string) error {
 			}
 			return budgetErr
 		}
-		if execErr != nil {
+		if execErr != nil && finished.Status != "timeout" {
 			return execErr
 		}
 	}
@@ -248,7 +278,7 @@ func enforceStudyBudget(m studycontract.Manifest, s studyState) error {
 		if err != nil {
 			return err
 		}
-		if rec.Status == "timeout" || rec.Status == "budget_exceeded" {
+		if rec.Status == "budget_exceeded" {
 			return fmt.Errorf("run %s ended with status %s", cell.RunID, rec.Status)
 		}
 		if m.Budget.MaxTokens != nil {
@@ -344,8 +374,9 @@ func reconcilePendingStudyCell(m studycontract.Manifest, s *studyState) error {
 }
 
 func verifyStudyScenarios(m studycontract.Manifest) error {
+	l := layout()
 	for _, frozen := range m.Scenarios {
-		sc, err := resolveScenarioWithConsent(layout(), "", frozen.ID)
+		sc, err := corpus.Resolve(l.ScenariosDir(), "", frozen.ID)
 		if err != nil {
 			return fmt.Errorf("resolve frozen scenario %s: %w", frozen.ID, err)
 		}
@@ -364,9 +395,10 @@ func verifyStudyScenarios(m studycontract.Manifest) error {
 }
 
 func authorizeStudyScenarios(m studycontract.Manifest) error {
+	l := layout()
 	var scenarios []corpus.Scenario
 	for _, frozen := range m.Scenarios {
-		sc, err := resolveScenarioWithConsent(layout(), "", frozen.ID)
+		sc, err := corpus.Resolve(l.ScenariosDir(), "", frozen.ID)
 		if err != nil {
 			return fmt.Errorf("resolve scenario trust for %s: %w", frozen.ID, err)
 		}
@@ -389,7 +421,7 @@ func authorizeResolvedStudyScenarios(l paths.Layout, scenarios []corpus.Scenario
 func prepareStudyInputs(m studycontract.Manifest) error {
 	l := layout()
 	for _, frozen := range m.Scenarios {
-		sc, err := resolveScenarioWithConsent(l, "", frozen.ID)
+		sc, err := corpus.Resolve(l.ScenariosDir(), "", frozen.ID)
 		if err != nil {
 			return err
 		}

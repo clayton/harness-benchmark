@@ -16,6 +16,12 @@ repo:
   base_ref: "c3ffcfcdac9237cb446ae0acc5b228380e6ba52a"
   gold_ref: "a6bcd2ec188dd684c11076ea74747b46eb32f44c"
 
+fetches:
+  - kind: npm
+    lockfile: package-lock.json
+    source_lockfile: commander-package-lock.json
+    reason: Install lockfile-pinned npm dependencies
+
 prompt: |
   You are working in the commander.js repository (checked out at the provided base commit).
 

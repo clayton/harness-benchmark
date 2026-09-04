@@ -17,6 +17,52 @@ import (
 	"github.com/clayton/harness-benchmark/internal/corpus"
 )
 
+func TestSelectRuntimeAutoAndExplicit(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "podman")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\necho podman version test\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	rt, err := SelectRuntime("auto")
+	if err != nil || rt.Name != "podman" || rt.Version != "podman version test" || rt.Arch == "" {
+		t.Fatalf("runtime=%#v err=%v", rt, err)
+	}
+	if _, err := SelectRuntime("docker"); err == nil {
+		t.Fatal("expected missing explicit runtime error")
+	}
+	if _, err := SelectRuntime("containerd"); err == nil {
+		t.Fatal("expected unsupported runtime error")
+	}
+}
+
+func TestMinimumRequestUSDIncludesInputAndOutputBounds(t *testing.T) {
+	relay := Relay{MaxRequestBytes: 100000, MaxOutputTokens: 32768, MaxPromptUSDPerMillion: 0.075, MaxCompletionUSDPerMillion: 0.25}
+	if got := minimumRequestUSD(relay); got < 0.0156919 || got > 0.0156921 {
+		t.Fatalf("minimumRequestUSD=%f", got)
+	}
+}
+
+func TestRunRejectsUnpinnedRelayBeforeCredentials(t *testing.T) {
+	runtimeDir := t.TempDir()
+	runtimePath := filepath.Join(runtimeDir, "podman")
+	if err := os.WriteFile(runtimePath, []byte("#!/bin/sh\necho fake\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", runtimeDir)
+	_, err := Run(context.Background(), corpus.Scenario{}, Pack{}, "", "relay:latest", t.TempDir(), "")
+	if err == nil || !strings.Contains(err.Error(), "relay image must be pinned") {
+		t.Fatalf("err=%v", err)
+	}
+
+	relay := "example/relay@sha256:" + strings.Repeat("e", 64)
+	other := "example/relay@sha256:" + strings.Repeat("f", 64)
+	_, err = Run(context.Background(), corpus.Scenario{RelayImageDigest: other}, Pack{RelayImageDigest: relay}, "", relay, t.TempDir(), "")
+	if err == nil || !strings.Contains(err.Error(), "match the evaluator pack and scenario") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
 func TestPackDigestAndEd25519Envelope(t *testing.T) {
 	dir := t.TempDir()
 	packYAML := `schema: rodeo.evaluator.v1
@@ -24,6 +70,7 @@ scenario_slug: safe-task
 scenario_version: 1
 target_ref: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 environment_image_digest: example/image@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+relay_image_digest: example/relay@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 protocol_id: controlled-v3
 evaluator_commands: ["test -f /evaluator/hidden.txt"]
 `
@@ -73,6 +120,7 @@ scenario_slug: safe-task
 scenario_version: 1
 target_ref: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 environment_image_digest: ` + unsafe.image + `
+relay_image_digest: example/relay@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 protocol_id: controlled-v3
 evaluator_commands: ["true"]
 execution:
@@ -126,15 +174,15 @@ func TestDockerControlledRunEndToEnd(t *testing.T) {
 		image = "alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce"
 	}
 	pack := Pack{
-		ScenarioSlug: "synthetic", ScenarioVersion: 1, EnvironmentImageDigest: image, ProtocolID: "controlled-v3",
+		ScenarioSlug: "synthetic", ScenarioVersion: 1, EnvironmentImageDigest: image, RelayImageDigest: "hbench-model-relay@sha256:" + strings.Repeat("e", 64), ProtocolID: "controlled-v3",
 		EvaluatorCommands: []string{`test "$(cat result.txt)" = fixed`}, Budget: map[string]any{"max_minutes": 2},
-		Execution: Execution{Harness: "manual", HarnessVersion: "test", Model: "synthetic", ModelVersion: "1", Command: "printf 'fixed\\n' > result.txt"},
+		Execution: Execution{Harness: "manual", HarnessVersion: "test", Model: "synthetic", ModelVersion: "1", Command: "test -s HB_PROMPT.txt && printf 'fixed\\n' > result.txt"},
 		Relay:     Relay{Upstream: "https://api.openai.com/v1", BaseURLEnv: "OPENAI_BASE_URL", SecretEnv: "OPENAI_API_KEY", AuthHeader: "Authorization", AuthScheme: "Bearer", DummyKeyEnv: "OPENAI_API_KEY"},
 	}
 	t.Setenv("OPENAI_API_KEY", "synthetic-not-a-real-key")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	result, err := Run(ctx, corpus.Scenario{ID: "synthetic@1", ManifestDigest: strings.Repeat("d", 64), Repo: corpus.Repo{URL: repo, BaseRef: base}}, pack, packDir, "hbench-model-relay:v0.4.0", t.TempDir())
+	result, err := Run(ctx, corpus.Scenario{ID: "synthetic@1", Prompt: "fix the result", ManifestDigest: strings.Repeat("d", 64), RelayImageDigest: pack.RelayImageDigest, Repo: corpus.Repo{URL: repo, BaseRef: base}}, pack, packDir, pack.RelayImageDigest, t.TempDir(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +250,7 @@ test "$(cat "$workspace/result.txt")" = fixed
 }
 
 func TestScaffoldBaseIsACommittedRepository(t *testing.T) {
-	dir, cleanup, err := checkoutScenarioBase(corpus.Scenario{Workspace: corpus.Workspace{Kind: "scaffold", Files: map[string]string{"PLAN.md": "build it\n"}}})
+	dir, cleanup, err := checkoutScenarioBase(context.Background(), corpus.Scenario{Workspace: corpus.Workspace{Kind: "scaffold", Files: map[string]string{"PLAN.md": "build it\n"}}})
 	if err != nil {
 		t.Fatal(err)
 	}

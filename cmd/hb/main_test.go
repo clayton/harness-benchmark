@@ -9,9 +9,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/clayton/harness-benchmark/internal/controlled"
 	"github.com/clayton/harness-benchmark/internal/corpus"
+	"github.com/clayton/harness-benchmark/internal/fetchconsent"
 	"github.com/clayton/harness-benchmark/internal/loop"
 	"github.com/clayton/harness-benchmark/internal/paths"
+	"github.com/clayton/harness-benchmark/internal/publish"
 	studycontract "github.com/clayton/harness-benchmark/internal/study"
 )
 
@@ -31,6 +34,15 @@ func capture(t *testing.T, args []string) string {
 		t.Fatalf("run %v: %v\n%s", args, runErr, out)
 	}
 	return string(out)
+}
+
+func TestFetchApprovalFailsClosedOnEOF(t *testing.T) {
+	if approvedFetchAnswer("", io.EOF) {
+		t.Fatal("EOF approved a fetch")
+	}
+	if !approvedFetchAnswer("\n", nil) || !approvedFetchAnswer("yes\n", nil) {
+		t.Fatal("interactive approval was rejected")
+	}
 }
 
 func TestVersionSaysGo(t *testing.T) {
@@ -54,11 +66,55 @@ func TestBarePrintsOnlyTheSuggestedCommand(t *testing.T) {
 	if strings.Contains(out, "Harnesses") {
 		t.Fatalf("bare hbench should not list harnesses:\n%s", out)
 	}
-	if !strings.Contains(out, "hbench run -s") {
-		t.Fatalf("bare hbench should print one run command:\n%s", out)
+	want := "hbench ride -s rodeo:js-commander-negative-exp-E@3 --harness pi --model openrouter/z-ai/glm-5.3-flash --approve-spend\n"
+	if out != want {
+		t.Fatalf("bare hbench command = %q, want %q", out, want)
 	}
 	if strings.Count(strings.TrimSpace(out), "\n") > 1 {
 		t.Fatalf("want one command line, got:\n%s", out)
+	}
+}
+
+func TestSaveOCIRideCreatesLoadableLatestRun(t *testing.T) {
+	root := t.TempDir()
+	l := paths.New(root, root)
+	l.DataDir = filepath.Join(root, "data")
+	runID := "abcdeffedcba"
+	if err := os.MkdirAll(l.Worktree(runID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	passed := true
+	cost := 0.01
+	result := controlled.RunResult{
+		Payload: map[string]any{"run": map[string]any{"status": "completed", "telemetry": loop.Telemetry{EstimatedUSD: &cost}}},
+		Patch:   "diff --git a/a b/a\n",
+		Report:  map[string]any{"passed": passed},
+	}
+	scenario := corpus.Scenario{ID: "js-commander-negative-exp-E@3", Version: 3, Prompt: "fix it", ManifestDigest: strings.Repeat("a", 64), EnvironmentImageDigest: "example/environment@sha256:" + strings.Repeat("b", 64), Repo: corpus.Repo{BaseRef: strings.Repeat("c", 40), GoldRef: strings.Repeat("d", 40)}}
+	profile := loop.Profile{Harness: "pi", Provider: "openrouter", Model: "openrouter/z-ai/glm-5.3-flash", Reasoning: "high"}
+	runtime := controlled.Runtime{Name: "docker", Version: "29", Arch: "arm64"}
+	relayImage := "example/relay@sha256:" + strings.Repeat("e", 64)
+	if err := saveOCIRide(l, scenario, profile, runID, runtime, relayImage, 1, result); err != nil {
+		t.Fatal(err)
+	}
+	record, err := loop.Load(l, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record.Worktree != l.Worktree(runID) {
+		t.Fatalf("worktree=%q", record.Worktree)
+	}
+	latest, err := loop.LatestRecord(l)
+	if err != nil || latest.ID != runID {
+		t.Fatalf("latest=%+v err=%v", latest, err)
+	}
+	payload, err := publish.BuildPayload(l, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := payload["snapshot"].(map[string]any)["config"].(map[string]any)
+	if config["provider"] != "openrouter" || config["reasoning"] != "high" || config["relay_image_digest"] != relayImage || config["runtime"].(map[string]any)["name"] != "docker" {
+		t.Fatalf("published config=%+v", config)
 	}
 }
 
@@ -125,13 +181,13 @@ func TestPendingStudyRunCanResumeWithoutDuplicateSpend(t *testing.T) {
 	}
 }
 
-func TestStudyBudgetAcceptsEstimatedCostForStopThreshold(t *testing.T) {
+func TestStudyBudgetAcceptsTimedOutRunCostForStopThreshold(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HB_DATA_DIR", filepath.Join(root, "data"))
 	t.Setenv("HB_OUT_DIR", filepath.Join(root, "out"))
 	l := layout()
 	cost, complete, tokens := 0.25, false, 10
-	rec := loop.RunRecord{ID: "aabbccddeeff", Status: "completed", Worktree: l.Worktree("aabbccddeeff"), Harness: "pi", Model: "model", CreatedAt: loop.Now(), Telemetry: loop.Telemetry{EstimatedUSD: &cost, Complete: &complete, TotalTokens: &tokens, TokenComplete: boolPointer(true)}}
+	rec := loop.RunRecord{ID: "aabbccddeeff", Status: "timeout", Worktree: l.Worktree("aabbccddeeff"), Harness: "pi", Model: "model", CreatedAt: loop.Now(), Telemetry: loop.Telemetry{EstimatedUSD: &cost, Complete: &complete, TotalTokens: &tokens, TokenComplete: boolPointer(true)}}
 	if err := loop.Save(l, rec); err != nil {
 		t.Fatal(err)
 	}
@@ -143,6 +199,30 @@ func TestStudyBudgetAcceptsEstimatedCostForStopThreshold(t *testing.T) {
 }
 
 func boolPointer(value bool) *bool { return &value }
+
+func TestRideRequiresSpendApprovalBeforeSetup(t *testing.T) {
+	err := run([]string{"ride", "-s", "rodeo:anything@1", "--harness", "pi"})
+	if err == nil || !strings.Contains(err.Error(), "requires --approve-spend") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestApproveFetchPlanApprovesOnlyItsDigest(t *testing.T) {
+	root := t.TempDir()
+	l := paths.New(root, root)
+	l.DataDir = filepath.Join(root, "data")
+	plan := fetchconsent.New(fetchconsent.Item{Kind: "test", Source: "https://example.test", Reason: "test", Destination: "cache", Size: "1 byte"})
+	if err := approveFetchPlan(l, plan); err != nil {
+		t.Fatal(err)
+	}
+	if !fetchconsent.Approved(l.DataDir, plan.Digest()) {
+		t.Fatal("plan was not approved")
+	}
+	other := fetchconsent.New(fetchconsent.Item{Kind: "other", Source: "https://example.test", Reason: "test", Destination: "cache", Size: "1 byte"})
+	if fetchconsent.Approved(l.DataDir, other.Digest()) {
+		t.Fatal("different plan was approved")
+	}
+}
 
 func TestStudyRefusesUntrustedExternalScenarioBeforeExecution(t *testing.T) {
 	read, write, err := os.Pipe()

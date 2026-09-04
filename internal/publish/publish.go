@@ -195,7 +195,7 @@ func BuildPayload(l paths.Layout, id string) (map[string]any, error) {
 				if judgeProtocol, _ := config["judge_protocol"].(string); judgeProtocol != "" {
 					publicConfig["judge_protocol"] = judgeProtocol
 				}
-				for _, key := range []string{"harness_version", "provider", "reasoning", "extensions", "plugins", "tools", "subagent_topology", "budget", "environment", "network"} {
+				for _, key := range []string{"harness_version", "provider", "reasoning", "extensions", "plugins", "tools", "subagent_topology", "budget", "environment", "network", "relay_image_digest", "runtime"} {
 					if meaningfulPublicConfigValue(config[key]) {
 						publicConfig[key] = config[key]
 					}

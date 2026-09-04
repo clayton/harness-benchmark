@@ -12,6 +12,12 @@ import (
 	"testing"
 )
 
+func TestRodeoManifestLocationAcceptsPublishedUppercaseSlug(t *testing.T) {
+	if _, _, _, err := RodeoManifestLocation(t.TempDir(), "js-commander-negative-exp-E@1"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFetchRodeoVerifiesAndCachesSafeManifest(t *testing.T) {
 	manifest := map[string]any{
 		"schema": "rodeo.scenario.v2", "id": "safe-task@1", "slug": "safe-task", "version": 1,
@@ -44,6 +50,57 @@ func TestFetchRodeoVerifiesAndCachesSafeManifest(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "community", "safe-task-v1.json")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHydrateBuiltInUsesVersionedPublicSetup(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureCache(dir); err != nil {
+		t.Fatal(err)
+	}
+	local, err := Find(dir, "ruby-rails-length-validator-nil-proc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := local
+	remote.ID = local.ID + "@2"
+	remote.Version = 2
+	remote.BuiltinScenarioID = local.ID
+	remote.Acceptance.SetupCommands = []string{"bundle check"}
+	remote.Fetches = []Fetch{{Kind: "bundler", Lockfile: "Gemfile.lock", Reason: "locked gems"}}
+	remote.ProtocolID = "controlled-v3"
+	remote.NetworkPolicy = "none"
+	remote.EnvironmentImageDigest = "example/image@sha256:" + strings.Repeat("a", 64)
+	got, err := hydrateBuiltinScenario(dir, remote.ID, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != remote.ID || got.Acceptance.SetupCommands[0] != "bundle check" || got.Fetches[0].Kind != "bundler" ||
+		got.ProtocolID != remote.ProtocolID || got.NetworkPolicy != "none" || got.EnvironmentImageDigest != remote.EnvironmentImageDigest {
+		t.Fatalf("public version was not merged: %+v", got)
+	}
+}
+
+func TestHydrateBuiltInSuppliesBundledSourceLock(t *testing.T) {
+	dir := t.TempDir()
+	if err := EnsureCache(dir); err != nil {
+		t.Fatal(err)
+	}
+	local, err := Find(dir, "js-commander-negative-exp-E")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := local
+	remote.ID = local.ID + "@2"
+	remote.Version = 2
+	remote.BuiltinScenarioID = local.ID
+	remote.Fetches = []Fetch{{Kind: "npm", Lockfile: "package-lock.json", Reason: "locked packages"}}
+	got, err := hydrateBuiltinScenario(dir, remote.ID, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Fetches[0].SourceLockfile != "commander-package-lock.json" {
+		t.Fatalf("source lockfile=%q", got.Fetches[0].SourceLockfile)
 	}
 }
 

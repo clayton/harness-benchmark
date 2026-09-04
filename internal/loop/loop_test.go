@@ -51,6 +51,35 @@ func initGitRepo(t *testing.T, dir string) {
 	t.Setenv("HB_TEST_SHA", string(bytesTrim(sha)))
 }
 
+func TestCreateRunSeedsPackDependencyLockOutsideCandidateDiff(t *testing.T) {
+	home := t.TempDir()
+	cwd := t.TempDir()
+	src := filepath.Join(home, "src")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, src)
+	pack := t.TempDir()
+	writeFile(t, filepath.Join(pack, "got-package-lock.json"), "{\"lockfileVersion\":3}\n")
+	l := paths.New(home, cwd)
+	l.DataDir = filepath.Join(home, "data")
+	sc := corpus.Scenario{
+		ID: "locked", Title: "locked", Prompt: "fix it", SourceDir: pack,
+		Repo:    corpus.Repo{URL: src, BaseRef: os.Getenv("HB_TEST_SHA")},
+		Fetches: []corpus.Fetch{{Kind: "npm", Lockfile: "package-lock.json", SourceLockfile: "got-package-lock.json", Reason: "locked packages"}},
+	}
+	rec, err := CreateRun(l, sc, "manual", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(rec.Worktree, "package-lock.json")); err != nil {
+		t.Fatal(err)
+	}
+	if diff, err := gitDiff(rec.Worktree); err != nil || strings.TrimSpace(diff) != "" {
+		t.Fatalf("dependency lock entered candidate diff: %q err=%v", diff, err)
+	}
+}
+
 func TestCreateRunAndFinishWithoutExecute(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()

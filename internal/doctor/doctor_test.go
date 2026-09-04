@@ -24,11 +24,8 @@ func TestSuggestHeadlessUsesRunAndExecute(t *testing.T) {
 	if got.Scenario != "js-commander-negative-exp-E" {
 		t.Fatalf("scenario=%s", got.Scenario)
 	}
-	if !strings.Contains(got.Command, "hbench run -s js-commander-negative-exp-E --harness grok") {
+	if got.Command != "hbench ride -s js-commander-negative-exp-E --harness grok --approve-spend" {
 		t.Fatalf("command=%q", got.Command)
-	}
-	if !strings.Contains(got.Command, "&& hbench execute") {
-		t.Fatalf("expected run+execute, got %q", got.Command)
 	}
 	if strings.Count(got.Command, "\n") != 0 {
 		t.Fatalf("want exactly one command line, got %q", got.Command)

@@ -35,11 +35,14 @@ func ensureRepo(l paths.Layout, sc corpus.Scenario) (string, error) {
 		}
 	}
 	if _, err := os.Stat(filepath.Join(cache, ".git")); err != nil {
-		if err := os.MkdirAll(filepath.Dir(cache), 0o755); err != nil {
+		if err := os.MkdirAll(cache, 0o755); err != nil {
 			return "", err
 		}
-		if err := runGit("", "clone", sc.Repo.URL, cache); err != nil {
-			return "", fmt.Errorf("clone %s: %w", sc.Repo.URL, err)
+		if err := runGit(cache, "init", "-q"); err != nil {
+			return "", fmt.Errorf("initialize repository cache: %w", err)
+		}
+		if err := runGit(cache, "remote", "add", "origin", sc.Repo.URL); err != nil {
+			return "", fmt.Errorf("configure repository cache: %w", err)
 		}
 	}
 	if err := fetchRef(cache, sc.Repo.BaseRef); err != nil {
@@ -65,13 +68,16 @@ func fetchRef(repo, ref string) error {
 	if ref == "" {
 		return nil
 	}
-	if err := git(repo, "cat-file", "-t", ref); err == nil {
-		return nil
-	}
-	if err := git(repo, "fetch", "--depth=1", "origin", ref); err != nil {
-		if err2 := git(repo, "fetch", "origin", ref); err2 != nil {
-			return err
+	localRef := "refs/heads/hbench-cache-" + ref
+	if err := git(repo, "cat-file", "-t", ref); err != nil {
+		refspec := ref + ":" + localRef
+		if err := git(repo, "fetch", "--depth=1", "origin", refspec); err != nil {
+			if err2 := git(repo, "fetch", "origin", refspec); err2 != nil {
+				return err
+			}
 		}
+	} else if err := git(repo, "update-ref", localRef, ref); err != nil {
+		return err
 	}
 	return git(repo, "cat-file", "-t", ref)
 }
@@ -103,6 +109,9 @@ func PrepareWorktree(l paths.Layout, sc corpus.Scenario, runID string, runSetup 
 	if err := applyEnvironmentPatch(dest, sc); err != nil {
 		return "", err
 	}
+	if err := seedDependencyLocks(dest, sc); err != nil {
+		return "", err
+	}
 	exclude := filepath.Join(dest, ".git", "info", "exclude")
 	_ = os.MkdirAll(filepath.Dir(exclude), 0o755)
 	_ = os.WriteFile(exclude, []byte("HB_PROMPT.txt\nHB_RUN.md\nHB_LAUNCH.md\n"), 0o644)
@@ -115,7 +124,7 @@ func PrepareWorktree(l paths.Layout, sc corpus.Scenario, runID string, runSetup 
 		for _, cmd := range sc.Acceptance.SetupCommands {
 			c := exec.Command("sh", "-c", cmd)
 			c.Dir = dest
-			c.Env = preparationEnv(l, sc)
+			c.Env = preparationEnv(l, sc, dest)
 			if out, err := c.CombinedOutput(); err != nil {
 				return "", fmt.Errorf("setup %q: %w\n%s", cmd, err, out)
 			}
@@ -166,7 +175,7 @@ func prepareScaffold(l paths.Layout, sc corpus.Scenario, runID string, runSetup 
 		for _, line := range sc.Acceptance.SetupCommands {
 			c := exec.Command("sh", "-c", line)
 			c.Dir = dest
-			c.Env = preparationEnv(l, sc)
+			c.Env = preparationEnv(l, sc, dest)
 			if out, err := c.CombinedOutput(); err != nil {
 				return "", fmt.Errorf("setup %q: %w\n%s", line, err, out)
 			}
@@ -193,6 +202,38 @@ func minimalCommandEnv() []string {
 		}
 	}
 	return env
+}
+
+func seedDependencyLocks(dest string, sc corpus.Scenario) error {
+	changed := false
+	for _, fetch := range sc.Fetches {
+		if fetch.SourceLockfile == "" {
+			continue
+		}
+		raw, err := readRooted(sc.SourceDir, fetch.SourceLockfile)
+		if err != nil {
+			return fmt.Errorf("read dependency lockfile %s: %w", fetch.SourceLockfile, err)
+		}
+		if existing, err := readRooted(dest, fetch.Lockfile); err == nil {
+			if !bytes.Equal(existing, raw) {
+				return fmt.Errorf("dependency lockfile %s conflicts with the base repository", fetch.Lockfile)
+			}
+			continue
+		}
+		if err := writeRooted(dest, fetch.Lockfile, raw, 0o644); err != nil {
+			return err
+		}
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	_ = git(dest, "config", "user.email", "hbench@local")
+	_ = git(dest, "config", "user.name", "hbench")
+	if err := git(dest, "add", "-A"); err != nil {
+		return err
+	}
+	return git(dest, "commit", "--no-verify", "-m", "hbench: seed dependency lock")
 }
 
 func applyEnvironmentPatch(dest string, sc corpus.Scenario) error {

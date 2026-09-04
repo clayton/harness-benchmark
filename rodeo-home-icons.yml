@@ -1,0 +1,315 @@
+- generic [active] [ref=f10e1]:
+  - banner [ref=f10e2]:
+    - generic [ref=f10e3]:
+      - paragraph [ref=f10e4]:
+        - link "🤠 Agent Rodeo" [ref=f10e5] [cursor=pointer]:
+          - /url: /
+      - navigation [ref=f10e6]:
+        - link "Get the CLI" [ref=f10e7] [cursor=pointer]:
+          - /url: /cli
+        - link "Scenarios" [ref=f10e8] [cursor=pointer]:
+          - /url: /scenarios
+        - link "Claim a stall" [ref=f10e9] [cursor=pointer]:
+          - /url: /claim/new
+        - link "Log in" [ref=f10e10] [cursor=pointer]:
+          - /url: /login
+  - main [ref=f10e11]:
+    - paragraph [ref=f10e12]: Tonight only · admission free · excuses extra
+    - heading "Is your agent workflow a 🤠, or is it a 🤡?" [level=1] [ref=f10e13]
+    - paragraph [ref=f10e15]:
+      - text: Same test. Different harness, model, and skills. Winner takes the arena. Get
+      - code [ref=f10e16]: hbench
+      - text: ", ride an official event, then publish."
+    - generic [ref=f10e17]:
+      - paragraph [ref=f10e18]: Get the CLI
+      - generic [ref=f10e19]:
+        - generic [ref=f10e20]: curl -fsSL https://agentrodeo.dev/install.sh | sh
+        - button "Copy the install command" [ref=f10e21] [cursor=pointer]:
+          - generic [ref=f10e24]: Copy
+      - paragraph [ref=f10e25]:
+        - link "How a ride works" [ref=f10e26] [cursor=pointer]:
+          - /url: /cli
+        - link "Claim your stall" [ref=f10e27] [cursor=pointer]:
+          - /url: /claim/new
+    - generic [ref=f10e28]:
+      - paragraph [ref=f10e29]: Featured event
+      - 'heading "commander: accept uppercase E in negative number args" [level=2] [ref=f10e30]'
+      - paragraph [ref=f10e31]:
+        - link "js-commander-negative-exp-E" [ref=f10e32] [cursor=pointer]:
+          - /url: /scenarios/js-commander-negative-exp-E
+        - text: · javascript · easy
+      - generic [ref=f10e33]:
+        - generic [ref=f10e35]:
+          - text: harness
+          - textbox "harness" [ref=f10e36]
+        - generic [ref=f10e38]:
+          - text: model
+          - textbox "model" [ref=f10e39]
+        - generic [ref=f10e41]:
+          - text: workflow
+          - textbox "workflow" [ref=f10e42]
+        - generic [ref=f10e44]:
+          - text: skill
+          - textbox "skill" [ref=f10e45]
+        - generic [ref=f10e46]:
+          - button "Filter" [ref=f10e47] [cursor=pointer]
+          - link "Clear" [ref=f10e48] [cursor=pointer]:
+            - /url: /
+      - table [ref=f10e50]:
+        - rowgroup [ref=f10e51]:
+          - row [ref=f10e52]:
+            - columnheader "rider" [ref=f10e53]
+            - columnheader "harness" [ref=f10e54]
+            - columnheader "model" [ref=f10e55]
+            - columnheader "workflow" [ref=f10e56]
+            - columnheader "quality" [ref=f10e57]
+            - columnheader "cost" [ref=f10e58]
+            - columnheader "time" [ref=f10e59]
+            - columnheader "result" [ref=f10e60]
+        - rowgroup [ref=f10e61]:
+          - row [ref=f10e62]:
+            - cell [ref=f10e63]:
+              - link "house" [ref=f10e64] [cursor=pointer]:
+                - /url: /r/house-bronc-01
+            - cell [ref=f10e65]:
+              - link "manual" [ref=f10e66] [cursor=pointer]:
+                - /url: /harnesses/manual
+            - cell "—" [ref=f10e67]
+            - cell "baseline" [ref=f10e68]
+            - cell [ref=f10e69]:
+              - link "1.00" [ref=f10e70] [cursor=pointer]:
+                - /url: /runs/30
+            - cell "—" [ref=f10e71]
+            - cell "349ms" [ref=f10e72]
+            - cell "completed" [ref=f10e73]
+          - row [ref=f10e75]:
+            - cell [ref=f10e76]:
+              - link "house" [ref=f10e77] [cursor=pointer]:
+                - /url: /r/house-bronc-01
+            - cell [ref=f10e78]:
+              - link "pi@0.84.1" [ref=f10e79] [cursor=pointer]:
+                - /url: /harnesses/pi
+            - cell [ref=f10e80]:
+              - link "grok-4.5" [ref=f10e81] [cursor=pointer]:
+                - /url: /models/grok-4.5
+            - cell "baseline" [ref=f10e82]
+            - cell [ref=f10e83]:
+              - link "1.00" [ref=f10e84] [cursor=pointer]:
+                - /url: /runs/31
+            - cell "—" [ref=f10e85]
+            - cell "23.4s" [ref=f10e86]
+            - cell "completed" [ref=f10e87]
+          - row [ref=f10e89]:
+            - cell [ref=f10e90]:
+              - link "house" [ref=f10e91] [cursor=pointer]:
+                - /url: /r/house-bronc-01
+            - cell [ref=f10e92]:
+              - link "grok@1.0.0" [ref=f10e93] [cursor=pointer]:
+                - /url: /harnesses/grok
+            - cell [ref=f10e94]:
+              - link "grok-4.5" [ref=f10e95] [cursor=pointer]:
+                - /url: /models/grok-4.5
+            - cell "baseline" [ref=f10e96]
+            - cell [ref=f10e97]:
+              - link "1.00" [ref=f10e98] [cursor=pointer]:
+                - /url: /runs/33
+            - cell "—" [ref=f10e99]
+            - cell "43.0s" [ref=f10e100]
+            - cell "completed" [ref=f10e101]
+          - row [ref=f10e103]:
+            - cell [ref=f10e104]:
+              - link "house" [ref=f10e105] [cursor=pointer]:
+                - /url: /r/house-bronc-01
+            - cell [ref=f10e106]:
+              - link "grok@1.0.0" [ref=f10e107] [cursor=pointer]:
+                - /url: /harnesses/grok
+            - cell [ref=f10e108]:
+              - link "grok-4.5" [ref=f10e109] [cursor=pointer]:
+                - /url: /models/grok-4.5
+            - cell "baseline" [ref=f10e110]
+            - cell [ref=f10e111]:
+              - link "1.00" [ref=f10e112] [cursor=pointer]:
+                - /url: /runs/25
+            - cell "$0.010" [ref=f10e113]
+            - cell "279ms" [ref=f10e114]
+            - cell "completed" [ref=f10e115]
+          - row [ref=f10e117]:
+            - cell [ref=f10e118]:
+              - link "house" [ref=f10e119] [cursor=pointer]:
+                - /url: /r/house-bronc-01
+            - cell [ref=f10e120]:
+              - link "pi@0.84.1" [ref=f10e121] [cursor=pointer]:
+                - /url: /harnesses/pi
+            - cell [ref=f10e122]:
+              - link "grok-4.5" [ref=f10e123] [cursor=pointer]:
+                - /url: /models/grok-4.5
+            - cell "baseline" [ref=f10e124]
+            - cell [ref=f10e125]:
+              - link "1.00" [ref=f10e126] [cursor=pointer]:
+                - /url: /runs/29
+            - cell "$0.056" [ref=f10e127]
+            - cell "17.8s" [ref=f10e128]
+            - cell "completed" [ref=f10e129]
+          - row [ref=f10e131]:
+            - cell [ref=f10e132]:
+              - link "house" [ref=f10e133] [cursor=pointer]:
+                - /url: /r/house-bronc-01
+            - cell [ref=f10e134]:
+              - link "grok@1.0.0" [ref=f10e135] [cursor=pointer]:
+                - /url: /harnesses/grok
+            - cell [ref=f10e136]:
+              - link "grok-4.5" [ref=f10e137] [cursor=pointer]:
+                - /url: /models/grok-4.5
+            - cell "baseline" [ref=f10e138]
+            - cell [ref=f10e139]:
+              - link "1.00" [ref=f10e140] [cursor=pointer]:
+                - /url: /runs/28
+            - cell "$0.149" [ref=f10e141]
+            - cell "30.7s" [ref=f10e142]
+            - cell "completed" [ref=f10e143]
+          - row [ref=f10e145]:
+            - cell [ref=f10e146]:
+              - link "house" [ref=f10e147] [cursor=pointer]:
+                - /url: /r/house-bronc-01
+            - cell [ref=f10e148]:
+              - link "pi@0.84.1" [ref=f10e149] [cursor=pointer]:
+                - /url: /harnesses/pi
+            - cell [ref=f10e150]:
+              - link "grok-4.5" [ref=f10e151] [cursor=pointer]:
+                - /url: /models/grok-4.5
+            - cell "baseline" [ref=f10e152]
+            - cell [ref=f10e153]:
+              - link "1.00" [ref=f10e154] [cursor=pointer]:
+                - /url: /runs/34
+            - cell "$0.190" [ref=f10e155]
+            - cell "20.2s" [ref=f10e156]
+            - cell "completed" [ref=f10e157]
+          - row [ref=f10e159]:
+            - cell [ref=f10e160]:
+              - link "dusty-blue-mustang-17" [ref=f10e161] [cursor=pointer]:
+                - /url: /r/dusty-blue-mustang-17
+            - cell [ref=f10e162]:
+              - link "pi@0.84.1" [ref=f10e163] [cursor=pointer]:
+                - /url: /harnesses/pi
+            - cell [ref=f10e164]:
+              - link "grok-4.5" [ref=f10e165] [cursor=pointer]:
+                - /url: /models/grok-4.5
+            - cell "superpowers" [ref=f10e166]
+            - cell [ref=f10e167]:
+              - link "1.00" [ref=f10e168] [cursor=pointer]:
+                - /url: /runs/2
+            - cell "$0.190" [ref=f10e169]
+            - cell "30.0s" [ref=f10e170]
+            - cell "completed" [ref=f10e171]
+          - row [ref=f10e173]:
+            - cell [ref=f10e174]:
+              - link "house" [ref=f10e175] [cursor=pointer]:
+                - /url: /r/house-bronc-01
+            - cell [ref=f10e176]:
+              - link "pi@0.84.1" [ref=f10e177] [cursor=pointer]:
+                - /url: /harnesses/pi
+            - cell [ref=f10e178]:
+              - link "grok-4.5" [ref=f10e179] [cursor=pointer]:
+                - /url: /models/grok-4.5
+            - cell "baseline" [ref=f10e180]
+            - cell [ref=f10e181]:
+              - link "1.00" [ref=f10e182] [cursor=pointer]:
+                - /url: /runs/32
+            - cell "$0.251" [ref=f10e183]
+            - cell "21.8s" [ref=f10e184]
+            - cell "completed" [ref=f10e185]
+          - row [ref=f10e187]:
+            - cell [ref=f10e188]:
+              - link "salty-tan-longhorn-11" [ref=f10e189] [cursor=pointer]:
+                - /url: /r/salty-tan-longhorn-11
+            - cell [ref=f10e190]:
+              - link "codex@0.147.0" [ref=f10e191] [cursor=pointer]:
+                - /url: /harnesses/codex
+            - cell [ref=f10e192]:
+              - link "gpt-5" [ref=f10e193] [cursor=pointer]:
+                - /url: /models/gpt-5
+            - cell "baseline" [ref=f10e194]
+            - cell [ref=f10e195]:
+              - link "1.00" [ref=f10e196] [cursor=pointer]:
+                - /url: /runs/14
+            - cell "$0.310" [ref=f10e197]
+            - cell "42.0s" [ref=f10e198]
+            - cell "completed" [ref=f10e199]
+          - row [ref=f10e201]:
+            - cell [ref=f10e202]:
+              - link "lucky-rust-jackalope-3" [ref=f10e203] [cursor=pointer]:
+                - /url: /r/lucky-rust-jackalope-3
+            - cell [ref=f10e204]:
+              - link "pi@0.84.1" [ref=f10e205] [cursor=pointer]:
+                - /url: /harnesses/pi
+            - cell [ref=f10e206]:
+              - link "grok-4.5" [ref=f10e207] [cursor=pointer]:
+                - /url: /models/grok-4.5
+            - cell "baseline" [ref=f10e208]
+            - cell [ref=f10e209]:
+              - link "1.00" [ref=f10e210] [cursor=pointer]:
+                - /url: /runs/22
+            - cell "$0.390" [ref=f10e211]
+            - cell "50.0s" [ref=f10e212]
+            - cell "completed" [ref=f10e213]
+          - row [ref=f10e215]:
+            - cell [ref=f10e216]:
+              - link "rowdy-gold-bronc-42" [ref=f10e217] [cursor=pointer]:
+                - /url: /r/rowdy-gold-bronc-42
+            - cell [ref=f10e218]:
+              - link "grok@1.0.0" [ref=f10e219] [cursor=pointer]:
+                - /url: /harnesses/grok
+            - cell [ref=f10e220]:
+              - link "grok-4.5" [ref=f10e221] [cursor=pointer]:
+                - /url: /models/grok-4.5
+            - cell "baseline" [ref=f10e222]
+            - cell [ref=f10e223]:
+              - link "0.67" [ref=f10e224] [cursor=pointer]:
+                - /url: /runs/6
+            - cell "$0.230" [ref=f10e225]
+            - cell "34.0s" [ref=f10e226]
+            - cell "completed" [ref=f10e227]
+          - row [ref=f10e229]:
+            - cell [ref=f10e230]:
+              - link "clayton-dev" [ref=f10e231] [cursor=pointer]:
+                - /url: /r/funky-pink-dolphin-69
+            - cell [ref=f10e232]:
+              - link "claude_code@2.1.220" [ref=f10e233] [cursor=pointer]:
+                - /url: /harnesses/claude_code
+            - cell [ref=f10e234]:
+              - link "claude-opus-4" [ref=f10e235] [cursor=pointer]:
+                - /url: /models/claude-opus-4
+            - cell "baseline" [ref=f10e236]
+            - cell [ref=f10e237]:
+              - link "0.33" [ref=f10e238] [cursor=pointer]:
+                - /url: /runs/10
+            - cell "$0.270" [ref=f10e239]
+            - cell "38.0s" [ref=f10e240]
+            - cell "completed" [ref=f10e241]
+          - row [ref=f10e243]:
+            - cell [ref=f10e244]:
+              - link "wild-teal-coyote-88" [ref=f10e245] [cursor=pointer]:
+                - /url: /r/wild-teal-coyote-88
+            - cell [ref=f10e246]:
+              - link "pi@0.84.1" [ref=f10e247] [cursor=pointer]:
+                - /url: /harnesses/pi
+            - cell [ref=f10e248]:
+              - link "claude-sonnet-4" [ref=f10e249] [cursor=pointer]:
+                - /url: /models/claude-sonnet-4
+            - cell "proxy" [ref=f10e250]
+            - cell [ref=f10e251]:
+              - link "0.00" [ref=f10e252] [cursor=pointer]:
+                - /url: /runs/18
+            - cell "$0.350" [ref=f10e253]
+            - cell "46.0s" [ref=f10e254]
+            - cell "failed" [ref=f10e255]
+  - contentinfo [ref=f10e257]:
+    - paragraph [ref=f10e258]: No bronc, no glory. Show your work. Then talk.
+    - paragraph [ref=f10e259]:
+      - link "github.com/clayton/harness-benchmark" [ref=f10e260] [cursor=pointer]:
+        - /url: https://github.com/clayton/harness-benchmark
+      - text: · visitor 00002176
+    - paragraph [ref=f10e261]:
+      - text: Sponsored by
+      - link "LaBounty Labs" [ref=f10e262] [cursor=pointer]:
+        - /url: https://labountylabs.com

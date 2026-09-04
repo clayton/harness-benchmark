@@ -25,6 +25,7 @@ type Pack struct {
 	ScenarioVersion        int            `yaml:"scenario_version"`
 	TargetRef              string         `yaml:"target_ref"`
 	EnvironmentImageDigest string         `yaml:"environment_image_digest"`
+	RelayImageDigest       string         `yaml:"relay_image_digest"`
 	ProtocolID             string         `yaml:"protocol_id"`
 	EvaluatorCommands      []string       `yaml:"evaluator_commands"`
 	Execution              Execution      `yaml:"execution"`
@@ -42,12 +43,18 @@ type Execution struct {
 }
 
 type Relay struct {
-	Upstream    string `yaml:"upstream"`
-	BaseURLEnv  string `yaml:"base_url_env"`
-	SecretEnv   string `yaml:"secret_env"`
-	AuthHeader  string `yaml:"auth_header"`
-	AuthScheme  string `yaml:"auth_scheme"`
-	DummyKeyEnv string `yaml:"dummy_key_env"`
+	Upstream                   string  `yaml:"upstream"`
+	BaseURLEnv                 string  `yaml:"base_url_env"`
+	SecretEnv                  string  `yaml:"secret_env"`
+	AuthHeader                 string  `yaml:"auth_header"`
+	AuthScheme                 string  `yaml:"auth_scheme"`
+	DummyKeyEnv                string  `yaml:"dummy_key_env"`
+	AllowedModel               string  `yaml:"allowed_model"`
+	MaxRequestUSD              float64 `yaml:"max_request_usd"`
+	MaxRequestBytes            int     `yaml:"max_request_bytes"`
+	MaxOutputTokens            int     `yaml:"max_output_tokens"`
+	MaxPromptUSDPerMillion     float64 `yaml:"max_prompt_usd_per_million"`
+	MaxCompletionUSDPerMillion float64 `yaml:"max_completion_usd_per_million"`
 }
 
 func PinnedImage(value string) bool {
@@ -71,6 +78,9 @@ func LoadPack(path string) (Pack, string, error) {
 	}
 	if !pinnedImage.MatchString(pack.EnvironmentImageDigest) {
 		return Pack{}, "", fmt.Errorf("environment image must be pinned by sha256 digest")
+	}
+	if !pinnedImage.MatchString(pack.RelayImageDigest) {
+		return Pack{}, "", fmt.Errorf("relay image must be pinned by sha256 digest")
 	}
 	if pack.ProtocolID != "controlled-v3" || len(pack.EvaluatorCommands) == 0 {
 		return Pack{}, "", fmt.Errorf("controlled-v3 protocol and evaluator commands are required")
@@ -96,9 +106,21 @@ func LoadPack(path string) (Pack, string, error) {
 				return Pack{}, "", fmt.Errorf("execution environment %s looks like a credential", key)
 			}
 		}
+		if maxUSD, capped := budgetNumber(pack.Budget, "max_usd"); capped {
+			if upstream.Hostname() != "openrouter.ai" || pack.Relay.AllowedModel == "" || pack.Relay.MaxRequestUSD <= 0 || pack.Relay.MaxRequestUSD > maxUSD ||
+				pack.Relay.MaxRequestBytes <= 0 || pack.Relay.MaxRequestBytes > 20*1024*1024 || pack.Relay.MaxOutputTokens <= 0 ||
+				pack.Relay.MaxPromptUSDPerMillion <= 0 || pack.Relay.MaxCompletionUSDPerMillion <= 0 ||
+				pack.Relay.MaxRequestUSD+1e-12 < minimumRequestUSD(pack.Relay) {
+				return Pack{}, "", fmt.Errorf("capped OpenRouter relay requires model, request, token, price, and reservation bounds")
+			}
+		}
 	}
 	digest, err := DigestDir(path)
 	return pack, digest, err
+}
+
+func minimumRequestUSD(relay Relay) float64 {
+	return (float64(relay.MaxRequestBytes)*relay.MaxPromptUSDPerMillion + float64(relay.MaxOutputTokens)*relay.MaxCompletionUSDPerMillion) / 1_000_000
 }
 
 func DigestDir(root string) (string, error) {

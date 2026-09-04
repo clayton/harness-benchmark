@@ -1,0 +1,58 @@
+schema: hb.study.v1
+id: pi-flash-model-comparison
+question: Which flash model performs best on the official Agent Rodeo scenarios using stock Pi?
+comparison_mode: controlled
+scenarios:
+  - id: rodeo:python-fastapi-stream-router-incomplete@2
+    digest: 35c4051099b40bccd36cc5acbbb236dca0ebcca5f2f662311d671fbd5b23196e
+  - id: rodeo:python-fastapi-stream-router-schema@2
+    digest: 23d6260a4cab7c8da52952c23f4cfc2332ac990256de7866c46bc2e8d046c945
+  - id: rodeo:ruby-rails-length-validator-nil-proc@2
+    digest: 893858025a751accf3c10c9965fde7fd76b5a3ab389bd31c4e155ed853e12c6f
+  - id: rodeo:zip-password-finder-python-port@1
+    digest: b0b8b87a64f9e54bfa94a9b46b8a58cf61b9d03b9eeca0e6c4be6d3939b33bd1
+  - id: rodeo:ar-erase-account@2
+    digest: 35b1ea44faca7fcc654878eeae0583ee8bf5aeb2cc4d067a56a8080cceff2e2d
+  - id: rodeo:sec-audit-sweep@2
+    digest: fa8e6ecb19f1452c02abfcb78b7639dd3fb63df28ebcf11e7bd62217d60aac8a
+  - id: rodeo:aj-enqueue-after-commit@2
+    digest: 6befa556fe1a4b5b141061f0dabfc851d5c216c8d297a4a87e59db832a86a342
+  - id: rodeo:as-purge-embedded-images@2
+    digest: 1def2045dedbb12b4319126205afe146f04d57568784fdc52d0f36adde054bdf
+  - id: rodeo:tst-error-page-flake@2
+    digest: 28959c3afd662ab7781a3c4e424dbb4175b976115e0f82cb25d477cfb670c955
+  - id: rodeo:go-chi-tee-bytes-double-count@1
+    digest: 808f9b936e9ddab987c4062da65533d7a50f7b962552aebfb18cb9d29dd9e6c5
+  - id: rodeo:js-commander-negative-exp-E@2
+    digest: a9c3129c7bc145dc633ed78b9de149991cc798072d04fcf70fd46288d9cc9143
+  - id: rodeo:ts-got-searchparams-setter@2
+    digest: 81d08c98c97977afed81926522c4df402c904dbafc500c1c382e8fed0ed078f3
+  - id: rodeo:python-pytest-approx-inf-rel@2
+    digest: 21a1afbe879c424280b0dc366108998d3fec5e8ca1c72284c39171f5a870cc18
+arms:
+  - id: gemini-3-8-flash
+    harness: pi
+    harness_version: 0.84.4
+    provider: openrouter
+    model: google/gemini-3.8-flash
+    workflow: baseline
+  - id: muse-spark-1-3
+    harness: pi
+    harness_version: 0.84.4
+    provider: openrouter
+    model: meta/muse-spark-1.3
+    workflow: baseline
+  - id: glm-5-3-flash
+    harness: pi
+    harness_version: 0.84.4
+    provider: openrouter
+    model: z-ai/glm-5.3-flash
+    workflow: baseline
+varied_axes: [model]
+repeats: 1
+seed: 380531
+judge_protocol: scenario-default
+win_rule: callout-title-v1
+budget:
+  max_minutes_per_run: 45
+  max_usd_total: 50

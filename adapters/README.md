@@ -15,10 +15,10 @@ finalize() -> patch + telemetry
 
 Most “adapters” today are **config launch strings**, not Python plugins:
 
-1. `hb run -s … -c …` prepares a workspace + snapshot
-2. `hb execute <run_id>` shells out to `harness_options.launch_headless`
+1. `hbench run -s … -c …` prepares a workspace + snapshot
+2. `hbench execute <run_id>` shells out to `harness_options.launch_headless`
 3. Telemetry is parsed from agent logs (pi JSONL, grok JSON today)
-4. Or: run any agent yourself and `hb finish` / `hb ingest`
+4. Or: run any agent yourself and `hbench finish` / `hbench ingest`
 
 Prefer thin wrappers around each harness CLI rather than re-implementing agent loops.
 
@@ -26,7 +26,7 @@ Prefer thin wrappers around each harness CLI rather than re-implementing agent l
 
 | Path | Status |
 |------|--------|
-| Manual (`hb finish` / `hb ingest`) | Supported |
+| Manual (`hbench finish` / `hbench ingest`) | Supported |
 | pi via `launch_headless` | Supported (JSON telemetry) |
 | Grok CLI via `launch_headless` | Supported (JSON telemetry) |
 | Claude Code / Codex / Cursor | Config sketches only — wire launch strings + parsers |

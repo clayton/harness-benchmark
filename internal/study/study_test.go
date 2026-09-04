@@ -21,6 +21,14 @@ func TestRejectsLocalScenarioIDsBeforeExecution(t *testing.T) {
 	}
 }
 
+func TestAcceptsPublishedScenarioIDWithUppercase(t *testing.T) {
+	m := valid()
+	m.Scenarios[0].ID = "rodeo:js-commander-negative-exp-E@1"
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestControlledRejectsUndeclaredDifference(t *testing.T) {
 	m := valid()
 	m.Arms[1].Workflow = "swarm"

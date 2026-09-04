@@ -125,13 +125,13 @@ Each adapter must:
 2. Inject the scenario prompt (and only allowed context)
 3. Invoke the harness/CLI with config knobs
 4. Stream/capture events until done or budget exhausted
-   (`hb execute` enforces config.budget: max_minutes/max_usd/max_turns/max_tokens;
+   (`hbench execute` enforces config.budget: max_minutes/max_usd/max_turns/max_tokens;
    soft warn at 80%, hard kill process group at limit → status `budget_exceeded`)
 5. Emit a `RunArtifact` (patch + metrics + raw log paths);
    static reports deep-link into `results/<run_id>/` artifacts
 
 v0 may start with a **manual adapter**: human pastes the prompt into a harness,
-then `hb ingest` records the patch and metrics. Automated adapters follow once
+then `hbench ingest` records the patch and metrics. Automated adapters follow once
 the data model is stable.
 
 ## Judging (v0)
@@ -159,7 +159,7 @@ Composite scores stay simple and documented in the report.
 
 ## Report
 
-No server. `hb report` writes a self-contained HTML file (tables, comparisons,
+No server. `hbench report` writes a self-contained HTML file (tables, comparisons,
 links to patches). Good enough to open in a browser and later publish as
 GitHub Pages if desired.
 
@@ -177,7 +177,7 @@ See [WISHLIST.md](./WISHLIST.md) for the living backlog. Highlights:
 1. Schemas + validate CLI + example fixtures ✅
 2. Manual run ingest + result store ✅
 3. Static HTML report ✅
-4. `hb run` / `hb finish` / `hb experiment` loop ✅
+4. `hbench run` / `hbench execute` / `hbench finish` loop ✅ (study runs use `hbench study run`)
 5. Auto test judge + gold FAIL_TO_PASS overlay ✅
 6. Headless execute (pi / Grok launch strings + telemetry) ✅
 7. Budget guards, stakeholder proxy/human, fingerprints, snapshots ✅
@@ -187,23 +187,24 @@ See [WISHLIST.md](./WISHLIST.md) for the living backlog. Highlights:
 ## CLI run lifecycle
 
 ```text
-hb run -s SCENARIO -c CONFIG
+hbench run -s SCENARIO -c CONFIG
     → workspaces/instances/<scenario>__<run_id>/  @ base_ref
     → results/<run_id>/{run.json,snapshot.json} (pending)
 
-hb execute <run_id>          # preferred: headless + budget + auto-finish
+hbench execute <run_id>          # preferred: headless + budget + auto-finish
     → agent.log, patch, judges, telemetry
 
 # or manual agent, then:
-hb finish <run_id>
+hbench finish <run_id>
     → capture git diff vs base_ref
     → overlay gold test files, run acceptance.test_commands
     → results/<run_id>/{patch.diff,judge.json,run.json}
 
-hb experiment --from experiments/foo.yaml
+hbench experiment --from experiments/foo.yaml
     → matrix of pending runs (skips completed fingerprints)
 
-hb report [--from experiments/foo.yaml]
+hbench report
+# study-scoped: hbench study report STUDY.yaml
     → reports/latest.html or reports/exp-<id>.html
 ```
 

@@ -12,8 +12,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -51,9 +51,10 @@ type Requirements struct {
 }
 
 type Fetch struct {
-	Kind     string `yaml:"kind" json:"kind"`
-	Lockfile string `yaml:"lockfile,omitempty" json:"lockfile,omitempty"`
-	Reason   string `yaml:"reason" json:"reason"`
+	Kind           string `yaml:"kind" json:"kind"`
+	Lockfile       string `yaml:"lockfile,omitempty" json:"lockfile,omitempty"`
+	SourceLockfile string `yaml:"source_lockfile,omitempty" json:"source_lockfile,omitempty"`
+	Reason         string `yaml:"reason" json:"reason"`
 }
 
 type Workspace struct {
@@ -107,6 +108,7 @@ type Scenario struct {
 	ProtocolID             string       `yaml:"protocol_id,omitempty" json:"protocol_id,omitempty"`
 	NetworkPolicy          string       `yaml:"network_policy,omitempty" json:"network_policy,omitempty"`
 	EnvironmentImageDigest string       `yaml:"environment_image_digest,omitempty" json:"environment_image_digest,omitempty"`
+	RelayImageDigest       string       `yaml:"relay_image_digest,omitempty" json:"relay_image_digest,omitempty"`
 	External               bool         `yaml:"-" json:"-"`
 }
 
@@ -221,7 +223,7 @@ func Resolve(officialDir, from, idOrPath string) (Scenario, error) {
 	return Find(officialDir, idOrPath)
 }
 
-var rodeoID = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*@[1-9][0-9]*$`)
+var rodeoID = regexp.MustCompile(`^[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*@[1-9][0-9]*$`)
 
 func RodeoManifestLocation(cacheDir, identifier string) (source, destination string, cached bool, err error) {
 	if !rodeoID.MatchString(identifier) {
@@ -343,14 +345,30 @@ func hydrateBuiltinScenario(cacheDir, identifier string, remote Scenario) (Scena
 		return Scenario{}, fmt.Errorf("this hbench release does not contain built-in scenario %q", remote.BuiltinScenarioID)
 	}
 	if local.Prompt != remote.Prompt || local.Repo.URL != remote.Repo.URL || local.Repo.BaseRef != remote.Repo.BaseRef ||
-		!reflect.DeepEqual(local.Acceptance.SetupCommands, remote.Acceptance.SetupCommands) ||
-		!reflect.DeepEqual(local.Acceptance.TestCommands, remote.Acceptance.TestCommands) ||
-		!reflect.DeepEqual(local.Requirements, remote.Requirements) || !reflect.DeepEqual(local.Fetches, remote.Fetches) {
+		!slices.Equal(local.Acceptance.TestCommands, remote.Acceptance.TestCommands) {
 		return Scenario{}, fmt.Errorf("built-in scenario %q does not match the published version; update hbench", remote.BuiltinScenarioID)
 	}
 	local.ID = identifier
 	local.Status = remote.Status
 	local.Version = remote.Version
+	local.Acceptance.SetupCommands = remote.Acceptance.SetupCommands
+	local.Requirements = remote.Requirements
+	local.ProtocolID = remote.ProtocolID
+	local.NetworkPolicy = remote.NetworkPolicy
+	local.EnvironmentImageDigest = remote.EnvironmentImageDigest
+	local.RelayImageDigest = remote.RelayImageDigest
+	for i := range remote.Fetches {
+		if remote.Fetches[i].SourceLockfile != "" {
+			continue
+		}
+		for _, bundled := range local.Fetches {
+			if bundled.Kind == remote.Fetches[i].Kind && bundled.Lockfile == remote.Fetches[i].Lockfile {
+				remote.Fetches[i].SourceLockfile = bundled.SourceLockfile
+				break
+			}
+		}
+	}
+	local.Fetches = remote.Fetches
 	local.ManifestDigest = remote.ManifestDigest
 	local.BuiltinScenarioID = remote.BuiltinScenarioID
 	local.External = false

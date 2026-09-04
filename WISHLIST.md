@@ -12,7 +12,7 @@ PRs / forks welcome; pick whatever matches your axis of curiosity.
 | Idea | Notes |
 |------|--------|
 | **First-class adapters** for Claude Code, Codex, Cursor, Aider, etc. | Today: pi/Grok via `launch_headless` strings; manual ingest for everything else. See `adapters/README.md`. |
-| **Parallel matrix execute** | `hb experiment` creates runs; executing them is still sequential / manual. Fan-out with a process pool + shared rate limits. |
+| **Parallel matrix execute** | `hbench experiment` creates runs; executing them is still sequential / manual. Fan-out with a process pool + shared rate limits. |
 | **Experiment-level budget** | Cap total $ across an entire matrix, not only per run. |
 | **Docker / sandbox isolation** | SWE-bench-style containers; network allowlists; safer bash for untrusted agent code. |
 | **Windows / WSL notes** | Process-group kill and paths are macOS/Linux-first. |
@@ -77,7 +77,7 @@ PRs / forks welcome; pick whatever matches your axis of curiosity.
 
 | Idea | Notes |
 |------|--------|
-| **CI** | `hb validate` + `pytest` on PR; optional smoke without API keys. |
+| **CI** | `hbench validate` + `pytest` on PR; optional smoke without API keys. |
 | **Submodule / lockfile for vendor** | Optional git submodule for superpowers instead of manual clone. |
 | **Resolved version capture** | Auto-fill `resolved_harness_version` / `resolved_model` from CLI output more reliably. |
 | **Seed plumbing** | When harnesses expose seeds, pass them through `launch_headless` templates. |
@@ -106,7 +106,7 @@ Keep this list honest — these used to be “later” and now exist:
 - [x] Superpowers pin + A/B experiment YAMLs
 - [x] Incomplete-spec scenario + ecological proxy
 - [x] Combo fingerprint dedup / skip completed
-- [x] Snapshots + `hb rerun`
+- [x] Snapshots + `hbench rerun`
 - [x] Experiment HTML report + artifact deep links
 - [x] FAIL_TO_PASS gold test overlay
 
