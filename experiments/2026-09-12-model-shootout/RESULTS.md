@@ -62,7 +62,7 @@ Manifest: `study-final-v2.yaml`
 - Composer: [Go/chi](https://agentrodeo.dev/runs/42), [JavaScript/Commander](https://agentrodeo.dev/runs/43), [Python/pytest](https://agentrodeo.dev/runs/44)
 - Luna: [Go/chi](https://agentrodeo.dev/runs/45), [JavaScript/Commander](https://agentrodeo.dev/runs/46), [Python/pytest](https://agentrodeo.dev/runs/47)
 
-The Study contract itself is not published because hbench requires a separate Callout slug and statement.
+The Study contract is published to the existing [Callout](https://agentrodeo.dev/callouts/on-three-focused-public-coding-regressions-in-pi-muse-spark-1-3--cccff9). Its nine historical Open Range runs are declared evidence from one publisher, so the Callout is not independently replicated.
 
 ## Excluded attempts
 
