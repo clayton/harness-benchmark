@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	version           = "0.7.0"
+	version           = "0.7.1"
 	defaultRelayImage = "docker.io/claytonlz/agent-rodeo-model-relay@sha256:bcb8fa0938bc93d1c029d21978b7e8339ed24adf179109d5a79f48a5a6958dfa"
 )
 
