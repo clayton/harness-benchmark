@@ -4,5 +4,4 @@ A Callout is a testable public statement plus a frozen study contract. A Challen
 
 Keep source author and Callout creator separate. Summarize a third-party claim and link it with attribution. Do not treat reported numbers as Agent Rodeo evidence.
 
-The evidence badge says Self-published, Reproduced, or Controlled. Performance decides the title among eligible complete studies; the badge reports evidence strength.
-
+Report execution assurance and independent replication separately. Execution is Declared, Self-signed, or Approved-runner verified. Replication is Not replicated, Replicated by a distinct publisher count, Mixed, or Contested. Performance decides the title among eligible complete Studies. Open evidence never enters the official Rodeo Rating unless it also qualifies as approved Controlled evidence.
