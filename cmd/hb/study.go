@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/clayton/harness-benchmark/internal/adapter"
 	"github.com/clayton/harness-benchmark/internal/corpus"
 	"github.com/clayton/harness-benchmark/internal/fetchconsent"
 	"github.com/clayton/harness-benchmark/internal/loop"
@@ -36,6 +38,13 @@ type studyCell struct {
 	Scenario string `json:"scenario"`
 	Repeat   int    `json:"repeat"`
 	RunID    string `json:"run_id"`
+}
+
+type studyLocalInputs struct {
+	Schema      string              `json:"schema"`
+	StudyID     string              `json:"study_id"`
+	Digest      string              `json:"digest"`
+	LocalSkills map[string][]string `json:"local_skill_dirs"`
 }
 
 type stringList []string
@@ -128,15 +137,26 @@ func initStudy(args []string) error {
 		}
 		id := scenario.ID
 		digest := scenario.ManifestDigest
-		if strings.HasPrefix(ref, "rodeo:") {
+		var task map[string]any
+		switch {
+		case strings.HasPrefix(ref, "rodeo:"):
 			if digest == "" {
 				return fmt.Errorf("published scenario %s did not include a manifest digest", id)
 			}
 			id = "rodeo:" + id
-		} else {
-			// Keep the caller's local path as the contract ID. The scenario's
-			// embedded ID may collide with a public cache entry and would then
-			// resolve a different executable manifest during study run.
+		case *visibility == "public":
+			task, err = publicScenarioTask(scenario)
+			if err != nil {
+				return fmt.Errorf("public task %s: %w", scenario.ID, err)
+			}
+			digest, err = studycontract.TaskDigest(task)
+			if err != nil {
+				return fmt.Errorf("public task %s: %w", scenario.ID, err)
+			}
+			id = "local:" + digest[:16]
+		default:
+			// Private contracts retain the local path needed to execute local
+			// files. Public contracts embed a path-free hb.task.v1 object above.
 			id = filepath.Clean(ref)
 			if digest == "" {
 				digest, err = corpus.TrustDigest(scenario)
@@ -145,7 +165,7 @@ func initStudy(args []string) error {
 				}
 			}
 		}
-		scenarios = append(scenarios, studycontract.Scenario{ID: id, Digest: digest})
+		scenarios = append(scenarios, studycontract.Scenario{ID: id, Digest: digest, Task: task})
 	}
 
 	budget := studycontract.Budget{MaxMinutes: *maxMinutes}
@@ -159,8 +179,22 @@ func initStudy(args []string) error {
 	if *visibility == "private" {
 		manifestVisibility = "private"
 	}
-	manifest := studycontract.Manifest{Schema: studycontract.Schema, ID: filepath.Base(*outPath), Question: *question, ComparisonMode: *mode, Visibility: manifestVisibility, Scenarios: scenarios, Repeats: *repeats, Seed: *seed, JudgeProtocol: *judge, WinRule: studycontract.WinRule, Budget: budget}
+	schema := studycontract.Schema
+	if *visibility == "public" {
+		for _, scenario := range scenarios {
+			if len(scenario.Task) > 0 {
+				schema = studycontract.SchemaV2
+				break
+			}
+		}
+	}
+	manifest := studycontract.Manifest{Schema: schema, ID: filepath.Base(*outPath), Question: *question, ComparisonMode: *mode, Visibility: manifestVisibility, Scenarios: scenarios, Repeats: *repeats, Seed: *seed, JudgeProtocol: *judge, WinRule: studycontract.WinRule, Budget: budget}
 	for i, profile := range profiles {
+		preparedProfile, prepareErr := prepareStudyAdapter(profile)
+		if prepareErr != nil {
+			return prepareErr
+		}
+		profile = preparedProfile
 		if profile.HarnessVersion == "" {
 			if profile.Harness == "manual" {
 				profile.HarnessVersion = "human"
@@ -176,10 +210,22 @@ func initStudy(args []string) error {
 			return err
 		}
 		manifest.Arms = append(manifest.Arms, arm)
+		if *visibility == "public" && (arm.Mode != "" || len(arm.LocalSkillDigests) > 0 || arm.ModelVersion != "" || len(arm.PromptTreatment) > 0 || len(arm.Adapter) > 0 || len(arm.Assurance) > 0) {
+			manifest.Schema = studycontract.SchemaV2
+		}
 	}
 	manifest.VariedAxes = manifest.DifferingAxes()
 	if err := manifest.Validate(); err != nil {
 		return err
+	}
+	if *visibility == "public" {
+		if err := saveStudyLocalInputs(manifest); err != nil {
+			return err
+		}
+		manifest = publicStudyManifest(manifest)
+		if err := manifest.Validate(); err != nil {
+			return err
+		}
 	}
 	raw, err := yaml.Marshal(manifest)
 	if err != nil {
@@ -190,6 +236,39 @@ func initStudy(args []string) error {
 	}
 	fmt.Printf("Wrote %s\n", *outPath)
 	return printStudyPlan(manifest)
+}
+
+func publicScenarioTask(s corpus.Scenario) (map[string]any, error) {
+	stringList := func(items []string) []string {
+		if items == nil {
+			return []string{}
+		}
+		return items
+	}
+	value := map[string]any{
+		"schema": "hb.task.v1", "id": s.ID, "type": s.Type, "title": s.Title,
+		"description": s.Description, "prompt": s.Prompt, "language": s.Language,
+		"tags": stringList(s.Tags), "difficulty": s.Difficulty,
+		"repo": map[string]any{"url": s.Repo.URL, "base_ref": s.Repo.BaseRef, "gold_ref": s.Repo.GoldRef},
+		"acceptance": map[string]any{
+			"setup_commands": stringList(s.Acceptance.SetupCommands), "test_commands": stringList(s.Acceptance.TestCommands),
+			"build_commands": stringList(s.Acceptance.BuildCommands), "fail_to_pass": stringList(s.Acceptance.FailToPass),
+		},
+	}
+	// Normalize concrete slices and structs to the same JSON value types read
+	// from a published contract before applying the shared validator.
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var task map[string]any
+	if err := json.Unmarshal(raw, &task); err != nil {
+		return nil, err
+	}
+	if err := studycontract.ValidatePublicTask(task); err != nil {
+		return nil, err
+	}
+	return task, nil
 }
 
 func loadStudyProfile(ref string) (loop.Profile, error) {
@@ -275,6 +354,28 @@ func recipeProfiles(base []loop.Profile, models, skillsOn []string) []loop.Profi
 	return out
 }
 
+func prepareStudyAdapter(profile loop.Profile) (loop.Profile, error) {
+	if profile.AdapterManifest == "" {
+		return profile, nil
+	}
+	manifest, digest, err := adapter.Load(profile.AdapterManifest)
+	if err != nil {
+		return loop.Profile{}, err
+	}
+	raw, _ := json.Marshal(manifest)
+	if err := json.Unmarshal(raw, &profile.Adapter); err != nil {
+		return loop.Profile{}, err
+	}
+	profile.AdapterDigest = digest
+	if profile.Harness == "" {
+		profile.Harness = "adapter:" + manifest.ID
+	}
+	if profile.HarnessVersion == "" {
+		profile.HarnessVersion = "adapter/" + digest[:12]
+	}
+	return profile, nil
+}
+
 func profileToStudyArm(p loop.Profile, index int) (studycontract.Arm, error) {
 	id := p.ID
 	if id == "" {
@@ -306,7 +407,7 @@ func profileToStudyArm(p loop.Profile, index int) (studycontract.Arm, error) {
 		}
 		digests = append(digests, digest)
 	}
-	return studycontract.Arm{ID: id, Mode: mode, LocalSkills: p.LocalSkills, LocalSkillDigests: digests, ConfigDigest: configDigest, ConfigStatus: configStatus, Harness: p.Harness, Version: p.HarnessVersion, Provider: p.Provider, Model: p.Model, Reasoning: p.Reasoning, Workflow: p.Workflow, Skills: p.Skills, Extensions: p.Extensions, Plugins: p.Plugins, Tools: p.Tools, Subagents: p.Subagents, Environment: p.Environment, Network: p.Network}, nil
+	return studycontract.Arm{ID: id, Mode: mode, LocalSkills: p.LocalSkills, LocalSkillDigests: digests, ConfigDigest: configDigest, ConfigStatus: configStatus, Harness: p.Harness, Version: p.HarnessVersion, Provider: p.Provider, Model: p.Model, Reasoning: p.Reasoning, Workflow: p.Workflow, Skills: p.Skills, Extensions: p.Extensions, Plugins: p.Plugins, Tools: p.Tools, Subagents: p.Subagents, Environment: p.Environment, Network: p.Network, ModelVersion: p.ModelVersion, PromptTreatment: p.PromptTreatment, Adapter: p.Adapter, Assurance: p.Assurance}, nil
 }
 
 func resolveStudyInitScenario(ref string) (corpus.Scenario, error) {
@@ -389,6 +490,12 @@ func cmdStudy(args []string) error {
 	if err != nil {
 		return err
 	}
+	if action == "run" || action == "publish" {
+		m, err = loadStudyLocalInputs(m)
+		if err != nil {
+			return err
+		}
+	}
 	switch action {
 	case "validate":
 		label := "publishable"
@@ -403,6 +510,8 @@ func cmdStudy(args []string) error {
 		return printStudyStatus(m)
 	case "report":
 		return writeStudyReport(path, m)
+	case "export":
+		return exportStudy(m, actionArgs)
 	case "run":
 		return runStudy(m, actionArgs)
 	case "publish":
@@ -410,6 +519,79 @@ func cmdStudy(args []string) error {
 	default:
 		return fmt.Errorf("unknown study command %q", action)
 	}
+}
+
+func exportStudy(m studycontract.Manifest, args []string) error {
+	format, out := "json", ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--format":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--format requires json or csv")
+			}
+			format = args[i+1]
+			i++
+		case "--out":
+			if i+1 >= len(args) {
+				return fmt.Errorf("--out requires a path")
+			}
+			out = args[i+1]
+			i++
+		}
+	}
+	if format != "json" && format != "csv" {
+		return fmt.Errorf("study export format must be json or csv")
+	}
+	s, err := loadStudyState(m)
+	if err != nil {
+		return err
+	}
+	type row struct {
+		RunID, ArmID, ScenarioID string
+		Repeat                   int
+		Status                   string
+		Quality                  float64
+		Tokens                   *int
+		Cost                     *float64
+		WallMS                   int
+	}
+	rows := make([]row, 0, len(s.Completed))
+	for _, cell := range s.Completed {
+		record, loadErr := loop.Load(layout(), cell.RunID)
+		if loadErr != nil {
+			return loadErr
+		}
+		rows = append(rows, row{record.ID, cell.Arm, cell.Scenario, cell.Repeat, record.Status, loop.Quality(record), record.Telemetry.TotalTokens, record.Telemetry.EstimatedUSD, record.Telemetry.WallMS})
+	}
+	if out == "" {
+		out = m.ID + "." + format
+	}
+	if format == "csv" {
+		file, err := os.Create(out)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+		w := csv.NewWriter(file)
+		_ = w.Write([]string{"run_id", "arm_id", "scenario_id", "repeat", "status", "quality", "tokens", "estimated_usd", "wall_ms"})
+		for _, r := range rows {
+			_ = w.Write([]string{r.RunID, r.ArmID, r.ScenarioID, fmt.Sprint(r.Repeat), r.Status, fmt.Sprintf("%.4f", r.Quality), fmt.Sprint(r.Tokens), fmt.Sprint(r.Cost), fmt.Sprint(r.WallMS)})
+		}
+		w.Flush()
+		if err := w.Error(); err != nil {
+			return err
+		}
+	} else {
+		encoded, err := json.MarshalIndent(map[string]any{"schema": "hb.study.export.v1", "manifest": m, "runs": rows}, "", "  ")
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(out, append(encoded, '\n'), 0o600); err != nil {
+			return err
+		}
+	}
+	fmt.Printf("Wrote %s (%d runs). Nothing was uploaded.\n", out, len(rows))
+	return nil
 }
 
 func writeStudyReport(manifestPath string, m studycontract.Manifest) error {
@@ -460,6 +642,59 @@ func printStudyPlan(m studycontract.Manifest) error {
 
 func statePath(m studycontract.Manifest) string {
 	return filepath.Join(layout().OutDir, "studies", safeStudyID(m.ID)+".json")
+}
+
+func studyLocalInputsPath(m studycontract.Manifest) string {
+	return filepath.Join(layout().OutDir, "studies", safeStudyID(m.ID)+".inputs.json")
+}
+
+func saveStudyLocalInputs(m studycontract.Manifest) error {
+	inputs := studyLocalInputs{Schema: "hb.study.inputs.v1", StudyID: m.ID, Digest: m.Digest(), LocalSkills: map[string][]string{}}
+	for _, arm := range m.Arms {
+		if len(arm.LocalSkills) > 0 {
+			inputs.LocalSkills[arm.ID] = append([]string(nil), arm.LocalSkills...)
+		}
+	}
+	if len(inputs.LocalSkills) == 0 {
+		return nil
+	}
+	raw, err := json.MarshalIndent(inputs, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(studyLocalInputsPath(m)), 0o700); err != nil {
+		return err
+	}
+	return loop.WriteFileAtomic(studyLocalInputsPath(m), append(raw, '\n'), 0o600)
+}
+
+func loadStudyLocalInputs(m studycontract.Manifest) (studycontract.Manifest, error) {
+	needsInputs := false
+	for _, arm := range m.Arms {
+		needsInputs = needsInputs || len(arm.LocalSkillDigests) > 0 && len(arm.LocalSkills) == 0
+	}
+	if !needsInputs {
+		return m, nil
+	}
+	raw, err := os.ReadFile(studyLocalInputsPath(m))
+	if err != nil {
+		return studycontract.Manifest{}, fmt.Errorf("study uses local skill hashes but local path mapping is unavailable: %w", err)
+	}
+	var inputs studyLocalInputs
+	if err := json.Unmarshal(raw, &inputs); err != nil {
+		return studycontract.Manifest{}, err
+	}
+	if inputs.Schema != "hb.study.inputs.v1" || inputs.StudyID != m.ID || inputs.Digest != m.Digest() {
+		return studycontract.Manifest{}, fmt.Errorf("local study inputs do not match this contract")
+	}
+	m.Arms = append([]studycontract.Arm(nil), m.Arms...)
+	for i := range m.Arms {
+		m.Arms[i].LocalSkills = append([]string(nil), inputs.LocalSkills[m.Arms[i].ID]...)
+	}
+	if err := m.Validate(); err != nil {
+		return studycontract.Manifest{}, err
+	}
+	return m, nil
 }
 func safeStudyID(id string) string {
 	return regexp.MustCompile(`[^a-zA-Z0-9._-]+`).ReplaceAllString(id, "-")
@@ -570,7 +805,7 @@ func runStudy(m studycontract.Manifest, args []string) error {
 		arm := findArm(m, c.Arm)
 		frozenScenario := findScenario(m, c.Scenario)
 		l := layout()
-		sc, err := corpus.Resolve(l.ScenariosDir(), "", c.Scenario)
+		sc, err := resolveFrozenStudyScenario(l, frozenScenario)
 		if err != nil {
 			return err
 		}
@@ -587,7 +822,7 @@ func runStudy(m studycontract.Manifest, args []string) error {
 			if err := verifyStudyArmLocalSkills(arm); err != nil {
 				return err
 			}
-			profile := loop.Profile{ID: arm.ID, Mode: arm.Mode, Harness: arm.Harness, HarnessVersion: arm.Version, Provider: arm.Provider, Model: arm.Model, Reasoning: arm.Reasoning, Workflow: arm.Workflow, Skills: arm.Skills, LocalSkills: arm.LocalSkills, ConfigDigest: arm.ConfigDigest, ConfigStatus: arm.ConfigStatus, Extensions: arm.Extensions, Plugins: arm.Plugins, Tools: arm.Tools, Subagents: arm.Subagents, Environment: arm.Environment, Network: arm.Network, JudgeProtocol: m.JudgeProtocol, Budget: studyBudgetDescriptor(m), StudyID: m.ID, ContractDigest: m.Digest(), ArmID: c.Arm, Repeat: c.Repeat, ScenarioDigest: frozenScenario.Digest, StudyScenarioID: c.Scenario}
+			profile := loop.Profile{ID: arm.ID, Mode: arm.Mode, Harness: arm.Harness, HarnessVersion: arm.Version, Provider: arm.Provider, Model: arm.Model, ModelVersion: arm.ModelVersion, PromptTreatment: arm.PromptTreatment, Adapter: arm.Adapter, Assurance: arm.Assurance, Task: frozenScenario.Task, Reasoning: arm.Reasoning, Workflow: arm.Workflow, Skills: arm.Skills, LocalSkills: arm.LocalSkills, ConfigDigest: arm.ConfigDigest, ConfigStatus: arm.ConfigStatus, Extensions: arm.Extensions, Plugins: arm.Plugins, Tools: arm.Tools, Subagents: arm.Subagents, Environment: arm.Environment, Network: arm.Network, JudgeProtocol: m.JudgeProtocol, Budget: studyBudgetDescriptor(m), StudyID: m.ID, ContractDigest: m.Digest(), ArmID: c.Arm, Repeat: c.Repeat, ScenarioDigest: frozenScenario.Digest, StudyScenarioID: c.Scenario}
 			rec, err := loop.CreateRunWithProfile(layout(), sc, profile, true)
 			if err != nil {
 				return err
@@ -774,7 +1009,7 @@ func reconcilePendingStudyCell(m studycontract.Manifest, s *studyState) error {
 func verifyStudyScenarios(m studycontract.Manifest) error {
 	l := layout()
 	for _, frozen := range m.Scenarios {
-		sc, err := corpus.Resolve(l.ScenariosDir(), "", frozen.ID)
+		sc, err := resolveFrozenStudyScenario(l, frozen)
 		if err != nil {
 			return fmt.Errorf("resolve frozen scenario %s: %w", frozen.ID, err)
 		}
@@ -785,7 +1020,50 @@ func verifyStudyScenarios(m studycontract.Manifest) error {
 	return nil
 }
 
+func resolveFrozenStudyScenario(l paths.Layout, frozen studycontract.Scenario) (corpus.Scenario, error) {
+	if len(frozen.Task) == 0 {
+		return corpus.Resolve(l.ScenariosDir(), "", frozen.ID)
+	}
+	if err := studycontract.ValidatePublicTask(frozen.Task); err != nil {
+		return corpus.Scenario{}, err
+	}
+	var task struct {
+		ID          string            `json:"id"`
+		Type        string            `json:"type"`
+		Title       string            `json:"title"`
+		Description string            `json:"description"`
+		Prompt      string            `json:"prompt"`
+		Language    string            `json:"language"`
+		Tags        []string          `json:"tags"`
+		Difficulty  string            `json:"difficulty"`
+		Repo        corpus.Repo       `json:"repo"`
+		Acceptance  corpus.Acceptance `json:"acceptance"`
+	}
+	raw, err := json.Marshal(frozen.Task)
+	if err != nil {
+		return corpus.Scenario{}, err
+	}
+	if err := json.Unmarshal(raw, &task); err != nil {
+		return corpus.Scenario{}, err
+	}
+	return corpus.Scenario{
+		ID: frozen.ID, Type: task.Type, Title: task.Title, Description: task.Description,
+		Prompt: task.Prompt, Language: task.Language, Tags: task.Tags, Difficulty: task.Difficulty,
+		Repo: task.Repo, Acceptance: task.Acceptance, ManifestDigest: frozen.Digest, External: true,
+	}, nil
+}
+
 func verifyStudyScenario(sc corpus.Scenario, frozen studycontract.Scenario) error {
+	if len(frozen.Task) > 0 {
+		digest, err := studycontract.TaskDigest(frozen.Task)
+		if err != nil {
+			return err
+		}
+		if digest != frozen.Digest {
+			return fmt.Errorf("scenario %s task digest drift: contract has %s, task has %s", frozen.ID, frozen.Digest, digest)
+		}
+		return nil
+	}
 	digest := sc.ManifestDigest
 	if digest == "" {
 		var err error
@@ -804,7 +1082,7 @@ func authorizeStudyScenarios(m studycontract.Manifest) error {
 	l := layout()
 	var scenarios []corpus.Scenario
 	for _, frozen := range m.Scenarios {
-		sc, err := corpus.Resolve(l.ScenariosDir(), "", frozen.ID)
+		sc, err := resolveFrozenStudyScenario(l, frozen)
 		if err != nil {
 			return fmt.Errorf("resolve scenario trust for %s: %w", frozen.ID, err)
 		}
@@ -827,7 +1105,7 @@ func authorizeResolvedStudyScenarios(l paths.Layout, scenarios []corpus.Scenario
 func prepareStudyInputs(m studycontract.Manifest) error {
 	l := layout()
 	for _, frozen := range m.Scenarios {
-		sc, err := corpus.Resolve(l.ScenariosDir(), "", frozen.ID)
+		sc, err := resolveFrozenStudyScenario(l, frozen)
 		if err != nil {
 			return err
 		}
@@ -844,6 +1122,17 @@ func prepareStudyInputs(m studycontract.Manifest) error {
 func verifyStudyHarnesses(m studycontract.Manifest) error {
 	seen := map[string]string{}
 	for _, arm := range m.Arms {
+		if len(arm.Adapter) > 0 {
+			_, digest, err := adapter.FromMap(arm.Adapter)
+			if err != nil {
+				return fmt.Errorf("arm %s adapter: %w", arm.ID, err)
+			}
+			expected := "adapter/" + digest[:12]
+			if arm.Version != expected {
+				return fmt.Errorf("arm %s adapter version drift: contract has %q, manifest is %q", arm.ID, arm.Version, expected)
+			}
+			continue
+		}
 		actual, ok := seen[arm.Harness]
 		if !ok {
 			actual = loop.DetectHarnessVersion(arm.Harness)
@@ -861,12 +1150,21 @@ func verifyStudyHarnesses(m studycontract.Manifest) error {
 
 func verifyStudyExecutionProfiles(m studycontract.Manifest) error {
 	for _, arm := range m.Arms {
-		profile := loop.Profile{Mode: arm.Mode, Harness: arm.Harness, Provider: arm.Provider, Model: arm.Model, Reasoning: arm.Reasoning, Workflow: arm.Workflow, Skills: arm.Skills, Extensions: arm.Extensions, Plugins: arm.Plugins, Tools: arm.Tools, Subagents: arm.Subagents, Environment: arm.Environment, Network: arm.Network}
+		profile := loop.Profile{Mode: arm.Mode, Harness: arm.Harness, Provider: arm.Provider, Model: arm.Model, ModelVersion: arm.ModelVersion, PromptTreatment: arm.PromptTreatment, Adapter: arm.Adapter, Assurance: arm.Assurance, Reasoning: arm.Reasoning, Workflow: arm.Workflow, Skills: arm.Skills, Extensions: arm.Extensions, Plugins: arm.Plugins, Tools: arm.Tools, Subagents: arm.Subagents, Environment: arm.Environment, Network: arm.Network}
 		if _, err := loop.ResolveMeasuredProfile(profile); err != nil {
 			return fmt.Errorf("arm %s: %w", arm.ID, err)
 		}
 	}
 	return nil
+}
+
+func publicStudyManifest(m studycontract.Manifest) studycontract.Manifest {
+	copy := m
+	copy.Arms = append([]studycontract.Arm(nil), m.Arms...)
+	for i := range copy.Arms {
+		copy.Arms[i].LocalSkills = nil
+	}
+	return copy
 }
 
 func publishStudy(path string, m studycontract.Manifest, args []string) error {
@@ -920,7 +1218,8 @@ func publishStudy(path string, m studycontract.Manifest, args []string) error {
 		}
 		links = append(links, studyRunLink(c))
 	}
-	out, err := publish.AuthenticatedJSON(http.MethodPost, "/api/v1/studies", map[string]any{"schema": "hb.study.publish.v1", "manifest": m, "contract_digest": m.Digest(), "callout_slug": *calloutSlug, "runs": links}, nil)
+	publicManifest := publicStudyManifest(m)
+	out, err := publish.AuthenticatedJSON(http.MethodPost, "/api/v1/studies", map[string]any{"schema": "hb.study.publish.v1", "manifest": publicManifest, "contract_digest": m.Digest(), "callout_slug": *calloutSlug, "runs": links}, nil)
 	if err != nil {
 		return err
 	}
@@ -993,7 +1292,7 @@ func printStudyPublicationPreview(path string, m studycontract.Manifest, s study
 		arms = append(arms, *byArm[arm.ID])
 	}
 	payload := map[string]any{
-		"schema": "hb.study.publish-preview.v1", "manifest": m, "contract_digest": m.Digest(),
+		"schema": "hb.study.publish-preview.v1", "manifest": publicStudyManifest(m), "contract_digest": m.Digest(),
 		"private": m.IsPrivate(), "runs": arms,
 		"reproduction": fmt.Sprintf("hbench study run %s --approve-spend", path),
 		"publication":  "hbench study publish " + path,
@@ -1041,7 +1340,7 @@ func cmdCallout(args []string) error {
 		if *source != "" {
 			sources = append(sources, studycontract.Source{URL: *source, Author: *author})
 		}
-		out, err := publish.AuthenticatedJSON(http.MethodPost, "/api/v1/callouts", map[string]any{"statement": *statement, "contract": m, "contract_digest": m.Digest(), "sources": sources}, nil)
+		out, err := publish.AuthenticatedJSON(http.MethodPost, "/api/v1/callouts", map[string]any{"statement": *statement, "contract": publicStudyManifest(m), "contract_digest": m.Digest(), "sources": sources}, nil)
 		if err != nil {
 			return err
 		}

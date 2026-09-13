@@ -66,9 +66,12 @@ hbench study report review-study.yaml
 post-run stop thresholds and may overshoot by one run. They do not replace the
 OCI relay hard cap.
 
-Personal setups or local skill directories require a private Study. Private
-Studies can be run and reported locally, but cannot be uploaded as public Study
-contracts. Use clean setup arms for a public comparison.
+Use `--visibility public` to create an `hb.study.v2` contract. Public Studies
+may use personal profiles, local skill content hashes, external adapters, and a
+local scenario with a public immutable repository. hbench embeds that scenario
+as `hb.task.v1`, strips machine paths and secrets from the contract, and keeps
+local skill path mappings in a private `hb-out/studies/*.inputs.json` sidecar.
+Use `--visibility private` when the Study itself must not be uploaded.
 
 ## Publish a finding
 

@@ -103,7 +103,7 @@ func sha256Hex(raw []byte) string {
 
 func Upload(baseURL string, envelope Envelope, client *http.Client) (map[string]any, error) {
 	if client == nil {
-		client = &http.Client{Timeout: 45 * time.Second}
+		client = &http.Client{Timeout: 45 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	raw, _ := json.Marshal(envelope)
 	request, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/controlled_runs", bytes.NewReader(raw))

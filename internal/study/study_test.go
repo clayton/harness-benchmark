@@ -13,6 +13,74 @@ func valid() Manifest {
 	return Manifest{Schema: Schema, ID: "test", Question: "Which wins?", ComparisonMode: "controlled", Scenarios: []Scenario{{ID: "rodeo:one@1", Digest: strings.Repeat("a", 64)}}, Arms: []Arm{{ID: "a", Harness: "codex", Version: "test", Model: "same"}, {ID: "b", Harness: "pi", Version: "test", Model: "same"}}, VariedAxes: []string{"harness"}, Repeats: 3, JudgeProtocol: "scenario-default", WinRule: WinRule, Budget: Budget{MaxMinutes: 45}}
 }
 
+func validPublicTask() map[string]any {
+	return map[string]any{
+		"schema": "hb.task.v1", "id": "issue-123", "type": "bugfix", "title": "Fix the bug", "description": "Regression",
+		"prompt": "Fix <the> bug & keep behavior.", "language": "go", "tags": []any{"bugfix"}, "difficulty": "easy",
+		"repo":       map[string]any{"url": "https://github.com/example/project.git", "base_ref": strings.Repeat("a", 40), "gold_ref": strings.Repeat("b", 40)},
+		"acceptance": map[string]any{"setup_commands": []any{"go mod download"}, "test_commands": []any{"go test ./..."}, "build_commands": []any{}, "fail_to_pass": []any{"regression"}},
+	}
+}
+
+func TestV2AcceptsPublicAdHocTaskAndPersonalSetup(t *testing.T) {
+	m := valid()
+	m.Schema = SchemaV2
+	task := validPublicTask()
+	digest, err := TaskDigest(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Scenarios = []Scenario{{ID: "local:" + digest[:16], Digest: digest, Task: task}}
+	m.Arms[0].Harness = "pi"
+	m.Arms[0].Mode = "personal"
+	m.Arms[0].ModelVersion = "resolved-1"
+	m.Arms[0].PromptTreatment = map[string]any{"placement": "user_append"}
+	m.Arms[1].Mode = "personal"
+	m.Arms[1].ModelVersion = "resolved-2"
+	m.Arms[1].PromptTreatment = map[string]any{"placement": "user_append"}
+	m.VariedAxes = []string{"model_version"}
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublicTaskRejectsUnknownSecretPathAndOversize(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(map[string]any)
+	}{
+		{"unknown", func(task map[string]any) { task["environment"] = map[string]any{"TOKEN": "x"} }},
+		{"secret", func(task map[string]any) { task["prompt"] = "API_KEY=do-not-publish" }},
+		{"path", func(task map[string]any) { task["description"] = "read /Users/alice/private" }},
+		{"private_repo", func(task map[string]any) { task["repo"].(map[string]any)["url"] = "https://127.0.0.1/repo" }},
+		{"oversize", func(task map[string]any) { task["prompt"] = strings.Repeat("x", 32769) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			task := validPublicTask()
+			tc.edit(task)
+			if err := ValidatePublicTask(task); err == nil {
+				t.Fatal("unsafe task was accepted")
+			}
+		})
+	}
+}
+
+func TestPublicTaskDigestDetectsTampering(t *testing.T) {
+	task := validPublicTask()
+	digest, err := TaskDigest(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := valid()
+	m.Schema = SchemaV2
+	m.Scenarios = []Scenario{{ID: "local:" + digest[:16], Digest: digest, Task: task}}
+	m.Scenarios[0].Task["prompt"] = "changed"
+	if err := m.Validate(); err == nil || !strings.Contains(err.Error(), "digest") {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestRejectsLocalScenarioIDsBeforeExecution(t *testing.T) {
 	m := valid()
 	m.Scenarios[0].ID = "one"

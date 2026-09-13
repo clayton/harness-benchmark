@@ -18,7 +18,7 @@ import (
 
 var environmentName = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 var pinnedImage = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._/:\-]*@sha256:[0-9a-f]{64}$`)
-var relayHosts = map[string]bool{"api.openai.com": true, "api.anthropic.com": true, "openrouter.ai": true, "api.x.ai": true, "generativelanguage.googleapis.com": true}
+var relayHosts = map[string]bool{"api.openai.com": true, "api.anthropic.com": true, "openrouter.ai": true, "api.x.ai": true, "api.meta.ai": true, "generativelanguage.googleapis.com": true}
 
 type Pack struct {
 	Schema          string `yaml:"schema"`
@@ -32,18 +32,37 @@ type Pack struct {
 	RelayImageDigest       string            `yaml:"relay_image_digest"`
 	ProtocolID             string            `yaml:"protocol_id"`
 	EvaluatorCommands      []string          `yaml:"evaluator_commands"`
-	Execution              Execution         `yaml:"execution"`
-	Relay                  Relay             `yaml:"relay"`
+	Execution              Execution         `yaml:"execution,omitempty"`
+	Relay                  Relay             `yaml:"relay,omitempty"`
+	Setups                 map[string]Setup  `yaml:"setups,omitempty"`
 	Budget                 map[string]any    `yaml:"budget"`
+}
+
+type Setup struct {
+	Execution Execution `yaml:"execution"`
+	Relay     Relay     `yaml:"relay"`
 }
 
 type Execution struct {
 	Harness        string            `yaml:"harness"`
 	HarnessVersion string            `yaml:"harness_version"`
+	Provider       string            `yaml:"provider"`
 	Model          string            `yaml:"model"`
 	ModelVersion   string            `yaml:"model_version"`
+	Reasoning      string            `yaml:"reasoning"`
+	Extensions     []string          `yaml:"extensions,omitempty"`
+	Plugins        []string          `yaml:"plugins,omitempty"`
 	Command        string            `yaml:"command"`
 	Environment    map[string]string `yaml:"environment"`
+	Pricing        Pricing           `yaml:"pricing,omitempty"`
+}
+
+type Pricing struct {
+	PromptUSDPerMillion     float64 `yaml:"prompt_usd_per_million"`
+	CompletionUSDPerMillion float64 `yaml:"completion_usd_per_million"`
+	CacheReadUSDPerMillion  float64 `yaml:"cache_read_usd_per_million"`
+	CacheWriteUSDPerMillion float64 `yaml:"cache_write_usd_per_million"`
+	Snapshot                string  `yaml:"snapshot"`
 }
 
 type Relay struct {
@@ -94,38 +113,97 @@ func LoadPack(path string) (Pack, string, error) {
 	if pack.ProtocolID != "controlled-v3" || len(pack.EvaluatorCommands) == 0 {
 		return Pack{}, "", fmt.Errorf("controlled-v3 protocol and evaluator commands are required")
 	}
-	if pack.Execution.Command != "" {
-		upstream, err := url.Parse(pack.Relay.Upstream)
-		if err != nil || upstream.Scheme != "https" || !relayHosts[upstream.Hostname()] {
-			return Pack{}, "", fmt.Errorf("relay upstream must be an approved HTTPS model provider")
+	if len(pack.Setups) > 0 && pack.Execution.Command != "" {
+		return Pack{}, "", fmt.Errorf("evaluator pack cannot combine a default execution with named setups")
+	}
+	if len(pack.Setups) == 0 {
+		if err := validateSetup("default", Setup{Execution: pack.Execution, Relay: pack.Relay}, pack.Budget); err != nil {
+			return Pack{}, "", err
 		}
-		if !environmentName.MatchString(pack.Relay.BaseURLEnv) || !environmentName.MatchString(pack.Relay.SecretEnv) ||
-			!environmentName.MatchString(pack.Relay.DummyKeyEnv) {
-			return Pack{}, "", fmt.Errorf("relay environment names are invalid")
-		}
-		if pack.Relay.BaseURLEnv == pack.Relay.SecretEnv {
-			return Pack{}, "", fmt.Errorf("provider secret cannot be exposed to the execution container")
-		}
-		if pack.Relay.AuthHeader != "Authorization" && pack.Relay.AuthHeader != "x-api-key" {
-			return Pack{}, "", fmt.Errorf("relay auth header is not allowed")
-		}
-		for key := range pack.Execution.Environment {
-			upper := strings.ToUpper(key)
-			if key == pack.Relay.SecretEnv || strings.Contains(upper, "SECRET") || strings.Contains(upper, "PASSWORD") || strings.Contains(upper, "TOKEN") || strings.Contains(upper, "API_KEY") {
-				return Pack{}, "", fmt.Errorf("execution environment %s looks like a credential", key)
+	} else {
+		for id, setup := range pack.Setups {
+			if !regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`).MatchString(id) {
+				return Pack{}, "", fmt.Errorf("invalid controlled setup ID %q", id)
 			}
-		}
-		if maxUSD, capped := budgetNumber(pack.Budget, "max_usd"); capped {
-			if upstream.Hostname() != "openrouter.ai" || pack.Relay.AllowedModel == "" || pack.Relay.MaxRequestUSD <= 0 || pack.Relay.MaxRequestUSD > maxUSD ||
-				pack.Relay.MaxRequestBytes <= 0 || pack.Relay.MaxRequestBytes > 20*1024*1024 || pack.Relay.MaxOutputTokens <= 0 ||
-				pack.Relay.MaxPromptUSDPerMillion <= 0 || pack.Relay.MaxCompletionUSDPerMillion <= 0 ||
-				pack.Relay.MaxRequestUSD+1e-12 < minimumRequestUSD(pack.Relay) {
-				return Pack{}, "", fmt.Errorf("capped OpenRouter relay requires model, request, token, price, and reservation bounds")
+			if err := validateSetup(id, setup, pack.Budget); err != nil {
+				return Pack{}, "", err
 			}
 		}
 	}
 	digest, err := DigestDir(path)
 	return pack, digest, err
+}
+
+func validateSetup(id string, setup Setup, budget map[string]any) error {
+	execution, relay := setup.Execution, setup.Relay
+	if execution.Command == "" || execution.Harness == "" || execution.HarnessVersion == "" || execution.Provider == "" || execution.Model == "" || execution.Reasoning == "" {
+		return fmt.Errorf("controlled setup %s requires command, harness, harness version, provider, model, and reasoning", id)
+	}
+	if strings.EqualFold(execution.Provider, "cursor") || strings.Contains(strings.ToLower(execution.Command), "hbench-pi-cursor") || execution.Environment["CURSOR_BACKEND_URL"] != "" {
+		return fmt.Errorf("controlled setup %s uses unsupported Cursor streaming; bounded accounting is required before controlled use", id)
+	}
+	pricing := execution.Pricing
+	priced := pricing.PromptUSDPerMillion != 0 || pricing.CompletionUSDPerMillion != 0 || pricing.CacheReadUSDPerMillion != 0 || pricing.CacheWriteUSDPerMillion != 0
+	if priced || pricing.Snapshot != "" {
+		if pricing.Snapshot == "" || len(pricing.Snapshot) > 200 || pricing.PromptUSDPerMillion <= 0 || pricing.CompletionUSDPerMillion <= 0 || pricing.CacheReadUSDPerMillion < 0 || pricing.CacheWriteUSDPerMillion < 0 {
+			return fmt.Errorf("controlled setup %s pricing snapshot and positive prompt/completion rates are required", id)
+		}
+	}
+	upstream, err := url.Parse(relay.Upstream)
+	if err != nil || upstream.Scheme != "https" || !relayHosts[upstream.Hostname()] {
+		return fmt.Errorf("controlled setup %s relay upstream must be an approved HTTPS model provider", id)
+	}
+	if !environmentName.MatchString(relay.BaseURLEnv) || !environmentName.MatchString(relay.SecretEnv) || !environmentName.MatchString(relay.DummyKeyEnv) {
+		return fmt.Errorf("controlled setup %s relay environment names are invalid", id)
+	}
+	if relay.BaseURLEnv == relay.SecretEnv {
+		return fmt.Errorf("controlled setup %s provider secret cannot be exposed to the execution container", id)
+	}
+	if relay.AuthHeader != "Authorization" && relay.AuthHeader != "x-api-key" {
+		return fmt.Errorf("controlled setup %s relay auth header is not allowed", id)
+	}
+	for key := range execution.Environment {
+		upper := strings.ToUpper(key)
+		if key == relay.SecretEnv || strings.Contains(upper, "SECRET") || strings.Contains(upper, "PASSWORD") || strings.Contains(upper, "TOKEN") || strings.Contains(upper, "API_KEY") {
+			return fmt.Errorf("controlled setup %s execution environment %s looks like a credential", id, key)
+		}
+	}
+	maxUSD, capped := budgetNumber(budget, "max_usd")
+	if !capped || maxUSD <= 0 || relay.AllowedModel == "" || relay.AllowedModel != execution.Model || relay.MaxRequestUSD <= 0 || relay.MaxRequestUSD > maxUSD ||
+		relay.MaxRequestBytes <= 0 || relay.MaxRequestBytes > 20*1024*1024 || relay.MaxOutputTokens <= 0 ||
+		relay.MaxPromptUSDPerMillion <= 0 || relay.MaxCompletionUSDPerMillion <= 0 ||
+		relay.MaxRequestUSD+1e-12 < minimumRequestUSD(relay) {
+		return fmt.Errorf("controlled setup %s requires model-bound relay and per-run/request limits", id)
+	}
+	return nil
+}
+
+func (pack Pack) SelectSetup(id string) (Pack, error) {
+	if len(pack.Setups) == 0 {
+		if id != "" && id != "default" {
+			return Pack{}, fmt.Errorf("evaluator pack has no named setup %q", id)
+		}
+		return pack, nil
+	}
+	if id == "" {
+		return Pack{}, fmt.Errorf("--setup is required; available setups: %s", strings.Join(sortedSetupIDs(pack.Setups), ", "))
+	}
+	setup, ok := pack.Setups[id]
+	if !ok {
+		return Pack{}, fmt.Errorf("unknown controlled setup %q; available setups: %s", id, strings.Join(sortedSetupIDs(pack.Setups), ", "))
+	}
+	pack.Execution = setup.Execution
+	pack.Relay = setup.Relay
+	return pack, nil
+}
+
+func sortedSetupIDs(setups map[string]Setup) []string {
+	ids := make([]string, 0, len(setups))
+	for id := range setups {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 // ValidateForScenario applies the scenario-dependent private target rules

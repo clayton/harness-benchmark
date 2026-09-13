@@ -23,6 +23,7 @@ type RunRecord struct {
 	Harness        string         `json:"harness"`
 	HarnessVersion string         `json:"harness_version,omitempty"`
 	Model          string         `json:"model,omitempty"`
+	ModelVersion   string         `json:"model_version,omitempty"`
 	Error          string         `json:"error,omitempty"`
 	Notes          string         `json:"notes,omitempty"`
 	Judges         []JudgeScore   `json:"judges,omitempty"`

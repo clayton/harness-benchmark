@@ -61,6 +61,17 @@ not json
 	}
 }
 
+func TestExtractPiCursorTelemetryUsesBilledComponentsNotCumulativeContext(t *testing.T) {
+	path := writeTelemetryFixture(t, `{"type":"message_end","message":{"provider":"cursor","usage":{"totalTokens":1000,"input":100,"output":20,"cacheRead":30,"cacheWrite":5,"reasoning":0,"cost":{"total":0}}}}
+{"type":"message_end","message":{"provider":"cursor","usage":{"totalTokens":1400,"input":200,"output":30,"cacheRead":40,"cacheWrite":10,"reasoning":0,"cost":{"total":0}}}}
+`)
+
+	got := ExtractTelemetry("pi", path)
+	assertIntPointer(t, "tokens in", got.TokensIn, 300)
+	assertIntPointer(t, "tokens out", got.TokensOut, 50)
+	assertIntPointer(t, "total", got.TotalTokens, 435)
+}
+
 func TestCompletePiLocalCost(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "models.json")
 	if err := os.WriteFile(path, []byte(`{"providers":{"mlx-lm":{"baseUrl":"http://127.0.0.1:8080/v1","models":[{"id":"qwen-local","cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}]}}}`), 0o600); err != nil {

@@ -14,6 +14,8 @@ hbench version
 hbench doctor
 ```
 
+The installer verifies the platform binary against a SHA-256 value pinned in the script and fails closed on download or checksum errors.
+
 `doctor` reports installed harnesses, detected skills, and scenario
 prerequisites. It does not install tools.
 
@@ -82,6 +84,15 @@ boundary. Model execution requires `--approve-spend`.
 
 ## Compare setups and share findings
 
+Arbitrary local harnesses can use a validated `hb.adapter.v1` manifest:
+
+```bash
+hbench adapter validate ./adapter.yaml
+hbench run -s ./task.yaml --adapter ./adapter.yaml
+```
+
+The manifest is hashed into the run setup and launches its command as an argv array, never through a shell.
+
 Create a study from saved setup profiles:
 
 ```bash
@@ -98,11 +109,14 @@ hbench study run review-study.yaml --approve-spend
 hbench study report review-study.yaml
 ```
 
-Personal or local-skill Studies must use `--visibility private`; they can be
-run and reported locally but cannot be uploaded as public Study contracts.
-Public Studies use clean, publishable setup arms. Studies freeze the question, scenarios, arms, changed axes, repeats, seed,
-judge protocol, and budgets. Study execution is local, sequential, resumable,
-and costs model tokens. A Study dollar threshold is checked after each run and
+Public `hb.study.v2` Studies may use personal profiles, local-skill hashes,
+external adapters, and immutable local `hb.task.v1` scenarios. The generated
+public contract strips machine paths and secrets; hbench keeps any local skill
+path mapping in a mode-0600 sidecar under `hb-out/studies`. Private v1 Studies
+remain supported. Studies freeze the question, scenarios, arms, changed axes,
+repeats, seed, judge protocol, and budgets. Study execution is local,
+sequential, resumable, and costs model tokens. A Study dollar threshold is
+checked after each run and
 can overshoot by one run; it is a post-run stop threshold. The OCI `--max-usd`
 value is a relay-enforced hard cap for each request.
 
@@ -113,9 +127,13 @@ hbench publish --preview RUN_ID
 hbench publish RUN_ID
 ```
 
-Publishing is explicit. Open Range runs are community evidence and do not
-change the official Rodeo Rating. A Callout or Study publication freezes the
-contract so other riders can reproduce it.
+Publishing is explicit. hbench signs each Open payload with an origin-scoped
+Ed25519 publisher key and uploads a bounded `patch.diff` when present; raw
+agent logs stay local. Open Range runs are community evidence and never change
+the official Rodeo Rating. Run pages and Callouts show execution assurance
+(Declared, Self-signed, or Approved-runner verified) separately from
+independent replication. A Callout or Study publication freezes the contract
+so other riders can reproduce it.
 
 ## Contribute a scenario
 
@@ -178,6 +196,8 @@ hbench finish [RUN_ID]
 hbench report
 hbench publish [--preview] [RUN_ID]
 hbench study init|validate|plan|run|status|report|publish STUDY.yaml
+hbench adapter validate ADAPTER.yaml
+hbench reproduce CALLOUT_URL
 hbench inspect -s SCENARIO
 hbench trust -s SCENARIO
 hbench skill install --target DIR

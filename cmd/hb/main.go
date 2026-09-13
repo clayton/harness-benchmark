@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
+	neturl "net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -13,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/clayton/harness-benchmark/internal/adapter"
 	"github.com/clayton/harness-benchmark/internal/controlled"
 	"github.com/clayton/harness-benchmark/internal/corpus"
 	"github.com/clayton/harness-benchmark/internal/doctor"
@@ -21,12 +25,14 @@ import (
 	"github.com/clayton/harness-benchmark/internal/paths"
 	"github.com/clayton/harness-benchmark/internal/publish"
 	"github.com/clayton/harness-benchmark/internal/report"
+	studycontract "github.com/clayton/harness-benchmark/internal/study"
 	"github.com/clayton/harness-benchmark/internal/trust"
 	"github.com/clayton/harness-benchmark/skills"
+	"gopkg.in/yaml.v3"
 )
 
 const (
-	version           = "0.6.0"
+	version           = "0.7.0"
 	defaultRelayImage = "docker.io/claytonlz/agent-rodeo-model-relay@sha256:bcb8fa0938bc93d1c029d21978b7e8339ed24adf179109d5a79f48a5a6958dfa"
 )
 
@@ -84,6 +90,10 @@ func run(args []string) error {
 		return cmdSetup(args[1:])
 	case "scenario":
 		return cmdScenario(args[1:])
+	case "adapter":
+		return cmdAdapter(args[1:])
+	case "reproduce":
+		return cmdReproduce(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q\n\n%s", args[0], usage())
 	}
@@ -119,11 +129,16 @@ func cmdControlledAction(action string, args []string) error {
 	packPath := fs.String("pack", "", "private evaluator pack directory")
 	keyPath := fs.String("key", defaultRunnerKey(), "runner private key path")
 	keyID := fs.String("key-id", "", "registered runner key ID")
+	setupID := fs.String("setup", "", "digest-bound named setup from the evaluator pack")
 	relayImage := fs.String("relay-image", os.Getenv("HB_RELAY_IMAGE"), "pinned credential relay image")
 	runtimeName := fs.String("runtime", os.Getenv("HB_RUNTIME"), "OCI runtime: auto, docker, podman, or nerdctl")
 	approveSpend := fs.Bool("approve-spend", false, "confirm this credential-backed run may spend money")
 	yes := fs.Bool("yes", false, "approve the displayed immutable plan")
 	artifactDir := fs.String("artifacts", filepath.Join(layout().OutDir, "controlled"), "private artifact directory")
+	studyPath := fs.String("study", "", "frozen Study YAML to bind before execution")
+	studyScenario := fs.String("study-scenario-id", "", "Study scenario cell id")
+	studyArm := fs.String("study-arm-id", "", "Study arm cell id")
+	studyRepeat := fs.Int("study-repeat", 0, "Study repeat number")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -155,6 +170,9 @@ func cmdControlledAction(action string, args []string) error {
 		minutes = int(value)
 	}
 	if action == "validate" {
+		if *setupID != "" || *studyPath != "" || *studyArm != "" || *studyScenario != "" || *studyRepeat != 0 {
+			return fmt.Errorf("--setup and Study binding flags apply only to controlled run")
+		}
 		ctx, cancel := controlled.RunTimeout(minutes)
 		defer cancel()
 		result, err := controlled.Validate(ctx, scenario, pack, *packPath)
@@ -175,6 +193,14 @@ func cmdControlledAction(action string, args []string) error {
 		}
 		fmt.Printf("Validated %s twice and uploaded attestation: %v\n", scenario.ID, response["accepted"])
 		return nil
+	}
+	pack, err = pack.SelectSetup(*setupID)
+	if err != nil {
+		return err
+	}
+	studyBinding, studyConfig, err := controlledStudyCell(*studyPath, *studyArm, *studyScenario, *studyRepeat, scenario, pack)
+	if err != nil {
+		return err
 	}
 	if *relayImage == "" || !controlled.PinnedImage(*relayImage) {
 		return fmt.Errorf("--relay-image must be pinned by sha256 digest")
@@ -218,6 +244,17 @@ func cmdControlledAction(action string, args []string) error {
 	if err != nil {
 		return err
 	}
+	if studyBinding != nil {
+		result.Payload["study"] = studyBinding
+		config, _ := result.Payload["config"].(map[string]any)
+		for _, key := range []string{"mode", "provider", "reasoning", "workflow", "skills", "extensions", "plugins", "tools", "subagent_topology", "interaction", "budget", "environment", "network", "config_sha256", "config_status", "prompt_treatment", "adapter", "assurance", "judge_protocol"} {
+			delete(config, key)
+		}
+		for key, value := range studyConfig {
+			config[key] = value
+		}
+		result.Payload["config"] = config
+	}
 	envelope, err := controlled.Sign(*keyPath, *keyID, result.Payload, result.Patch, result.Report)
 	if err != nil {
 		return err
@@ -232,6 +269,133 @@ func cmdControlledAction(action string, args []string) error {
 	}
 	fmt.Printf("Uploaded Controlled run %v\n  private log: %s (retain 90 days)\n", response["run_url"], result.LogPath)
 	return nil
+}
+
+func controlledStudyCell(path, armID, scenarioID string, repeat int, scenario corpus.Scenario, pack controlled.Pack) (map[string]any, map[string]any, error) {
+	provided := 0
+	for _, value := range []string{path, armID, scenarioID} {
+		if value != "" {
+			provided++
+		}
+	}
+	if repeat != 0 {
+		provided++
+	}
+	if provided == 0 {
+		return nil, nil, nil
+	}
+	if provided != 4 || repeat < 1 {
+		return nil, nil, fmt.Errorf("--study, --study-arm-id, --study-scenario-id, and --study-repeat are required together")
+	}
+	manifest, err := studycontract.Load(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	if manifest.IsPrivate() {
+		return nil, nil, fmt.Errorf("controlled evidence cannot bind a private Study")
+	}
+	if !regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{2,99}$`).MatchString(manifest.ID) {
+		return nil, nil, fmt.Errorf("controlled Study ID is not accepted by the attestation endpoint")
+	}
+	if repeat > manifest.Repeats {
+		return nil, nil, fmt.Errorf("Study repeat is outside the frozen contract")
+	}
+	var studyScenario *studycontract.Scenario
+	for i := range manifest.Scenarios {
+		if manifest.Scenarios[i].ID == scenarioID {
+			studyScenario = &manifest.Scenarios[i]
+			break
+		}
+	}
+	if studyScenario == nil || strings.TrimPrefix(scenarioID, "rodeo:") != scenario.ID || studyScenario.Digest != scenario.ManifestDigest {
+		return nil, nil, fmt.Errorf("controlled scenario does not match the frozen Study cell")
+	}
+	var arm *studycontract.Arm
+	for i := range manifest.Arms {
+		if manifest.Arms[i].ID == armID {
+			arm = &manifest.Arms[i]
+			break
+		}
+	}
+	if arm == nil {
+		return nil, nil, fmt.Errorf("Study arm is not in the frozen contract")
+	}
+	workflow := arm.Workflow
+	if workflow == "" {
+		workflow = "baseline"
+	}
+	if arm.Harness != pack.Execution.Harness || arm.Version != pack.Execution.HarnessVersion || arm.Provider != pack.Execution.Provider || arm.Model != pack.Execution.Model || arm.ModelVersion != pack.Execution.ModelVersion || arm.Reasoning != pack.Execution.Reasoning || workflow != "baseline" || !sameStringSet(arm.Extensions, pack.Execution.Extensions) || !sameStringSet(arm.Plugins, pack.Execution.Plugins) {
+		return nil, nil, fmt.Errorf("controlled evaluator setup does not match the frozen Study arm")
+	}
+	if len(arm.Skills) > 0 || len(arm.LocalSkillDigests) > 0 || len(arm.Tools) > 0 || arm.Subagents != "" || len(arm.PromptTreatment) > 0 || len(arm.Adapter) > 0 || len(arm.Assurance) > 0 || arm.ConfigDigest != "" || arm.ConfigStatus != "" {
+		return nil, nil, fmt.Errorf("controlled evaluator does not enforce the Study arm's custom setup fields")
+	}
+	if manifest.Schema == studycontract.SchemaV2 && arm.Mode != "clean-baseline" {
+		return nil, nil, fmt.Errorf("controlled Study arms must use clean-baseline mode")
+	}
+	if arm.Environment != "" && arm.Environment != pack.EnvironmentImageDigest {
+		return nil, nil, fmt.Errorf("Study environment does not match the controlled image digest")
+	}
+	if arm.Network != "none" {
+		return nil, nil, fmt.Errorf("controlled Study network must be explicitly none")
+	}
+	for key := range pack.Budget {
+		if key != "max_minutes" && key != "max_usd" {
+			return nil, nil, fmt.Errorf("controlled evaluator has an undeclared Study budget key %q", key)
+		}
+	}
+	packMinutes, ok := controlledBudgetNumber(pack.Budget, "max_minutes")
+	if !ok || packMinutes != float64(manifest.Budget.MaxMinutes) {
+		return nil, nil, fmt.Errorf("controlled timeout does not equal the frozen Study budget")
+	}
+	packUSD, ok := controlledBudgetNumber(pack.Budget, "max_usd")
+	if !ok || manifest.Budget.MaxUSDPerRun == nil || packUSD != *manifest.Budget.MaxUSDPerRun {
+		return nil, nil, fmt.Errorf("controlled spend cap does not equal the frozen Study per-run budget")
+	}
+	budget := map[string]any{"max_minutes_per_run": manifest.Budget.MaxMinutes}
+	if manifest.Budget.MaxTokens != nil {
+		budget["max_tokens_per_run"] = *manifest.Budget.MaxTokens
+	}
+	if manifest.Budget.MaxUSDPerRun != nil {
+		budget["max_usd_per_run"] = *manifest.Budget.MaxUSDPerRun
+	}
+	config := map[string]any{
+		"provider": arm.Provider, "reasoning": arm.Reasoning, "workflow": workflow,
+		"skills": []string{}, "extensions": arm.Extensions, "plugins": arm.Plugins,
+		"tools": []string{}, "interaction": "unattended", "budget": budget,
+		"judge_protocol": manifest.JudgeProtocol,
+	}
+	if arm.Mode != "" {
+		config["mode"] = arm.Mode
+	}
+	if arm.Environment != "" {
+		config["environment"] = arm.Environment
+	}
+	config["network"] = arm.Network
+	binding := map[string]any{
+		"id": manifest.ID, "contract_digest": manifest.Digest(), "scenario_id": studyScenario.ID,
+		"scenario_digest": studyScenario.Digest, "arm_id": arm.ID, "repeat": repeat,
+	}
+	return binding, config, nil
+}
+
+func sameStringSet(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	counts := map[string]int{}
+	for _, value := range left {
+		counts[value]++
+	}
+	for _, value := range right {
+		counts[value]--
+	}
+	for _, count := range counts {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func controlledBudgetNumber(budget map[string]any, key string) (float64, bool) {
@@ -278,6 +442,7 @@ Commands:
   hbench setup list
   hbench setup show <id>
   hbench scenario new|validate [flags]
+  hbench adapter validate PATH
 `
 }
 
@@ -350,6 +515,68 @@ func approvedFetchAnswer(answer string, err error) bool {
 	}
 	answer = strings.TrimSpace(strings.ToLower(answer))
 	return answer == "" || answer == "y" || answer == "yes"
+}
+
+func cmdReproduce(args []string) error {
+	if len(args) != 1 {
+		return fmt.Errorf("usage: hbench reproduce CALLOUT_URL")
+	}
+	rawURL := args[0]
+	u, err := neturl.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("invalid Callout URL")
+	}
+	slug := path.Base(strings.TrimSuffix(u.Path, "/"))
+	endpoint := strings.TrimSuffix(rawURL, "/")
+	if !strings.Contains(u.Path, "/api/") {
+		endpoint = u.Scheme + "://" + u.Host + "/api/v1/callouts/" + slug
+	}
+	resp, err := http.Get(endpoint)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("Callout API returned %s", resp.Status)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	if err != nil {
+		return err
+	}
+	var document map[string]any
+	if err := json.Unmarshal(body, &document); err != nil {
+		return fmt.Errorf("invalid Callout JSON: %w", err)
+	}
+	manifest, ok := document["contract"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("Callout response has no frozen contract")
+	}
+	id, _ := manifest["id"].(string)
+	if id == "" {
+		return fmt.Errorf("Callout contract has no study id")
+	}
+	out := id + ".yaml"
+	encoded, err := yaml.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(out, encoded, 0o600); err != nil {
+		return err
+	}
+	fmt.Printf("Wrote %s. Validate it before running: hbench study validate %s\\n", out, out)
+	return nil
+}
+
+func cmdAdapter(args []string) error {
+	if len(args) != 2 || args[0] != "validate" {
+		return fmt.Errorf("usage: hbench adapter validate PATH")
+	}
+	manifest, digest, err := adapter.Load(args[1])
+	if err != nil {
+		return err
+	}
+	fmt.Printf("Valid adapter %s@%s\\ndigest: %s\\ntelemetry: %s\\n", manifest.ID, manifest.Version, digest, manifest.Telemetry)
+	return nil
 }
 
 func cmdSkill(args []string) error {
@@ -654,6 +881,7 @@ func cmdRunMode(args []string, ride bool) error {
   --approve-spend  allow ride to execute the model
   --max-usd        OCI relay spend cap (default 1.00 USD)
   --trust-scenario approve this exact external scenario digest for this run
+  --adapter       hb.adapter.v1 manifest for an arbitrary local harness
 `, command)
 	}
 	scenario := fs.String("s", "", "scenario id")
@@ -680,6 +908,7 @@ func cmdRunMode(args []string, ride bool) error {
 	approveSpend := fs.Bool("approve-spend", false, "allow ride to execute the model")
 	maxUSD := fs.Float64("max-usd", 1, "OCI relay spend cap in USD")
 	trustScenario := fs.String("trust-scenario", "", "approved external scenario sha256 digest")
+	adapterPath := fs.String("adapter", "", "hb.adapter.v1 manifest for an arbitrary local harness")
 	fs.StringVar(scenario, "scenario", "", "scenario id")
 	if err := fs.Parse(args); err != nil {
 		if err == flag.ErrHelp {
@@ -711,7 +940,17 @@ func cmdRunMode(args []string, ride bool) error {
 			return err
 		}
 	}
-	profile := loop.Profile{Harness: *harness, Provider: *provider, Model: *model, Reasoning: *reasoning, Mode: *mode, Workflow: *workflow, Skills: skills, LocalSkills: skillDirs}
+	profile := loop.Profile{Harness: *harness, Provider: *provider, Model: *model, Reasoning: *reasoning, Mode: *mode, Workflow: *workflow, Skills: skills, LocalSkills: skillDirs, AdapterManifest: *adapterPath}
+	if *adapterPath != "" {
+		manifest, digest, loadErr := adapter.Load(*adapterPath)
+		if loadErr != nil {
+			return loadErr
+		}
+		profile.AdapterDigest = digest
+		if profile.Harness == "" {
+			profile.Harness = "adapter:" + manifest.ID
+		}
+	}
 	if *setupID != "" {
 		saved, loadErr := loop.LoadSetup(l, *setupID)
 		if loadErr != nil {
@@ -757,7 +996,9 @@ func cmdRunMode(args []string, ride bool) error {
 	if !ride && *runtimeName != "native" {
 		return fmt.Errorf("hbench run is the native compatibility path; use hbench ride --runtime %s", *runtimeName)
 	}
-	if profile.Harness != "manual" {
+	if profile.AdapterManifest != "" {
+		profile.HarnessVersion = "adapter/" + profile.AdapterDigest[:12]
+	} else if profile.Harness != "manual" {
 		identity, err := loop.DetectHarnessIdentity(profile.Harness)
 		if err != nil {
 			return err
@@ -899,7 +1140,7 @@ func cmdOCIRide(l paths.Layout, sc corpus.Scenario, profile loop.Profile, runtim
 		ScenarioSlug: strings.SplitN(sc.ID, "@", 2)[0], ScenarioVersion: sc.Version,
 		EnvironmentImageDigest: sc.EnvironmentImageDigest, RelayImageDigest: relayImage, ProtocolID: "controlled-v3",
 		EvaluatorCommands: commands,
-		Execution:         controlled.Execution{Harness: "pi", HarnessVersion: "0.84.4", Model: profile.Model, Command: "hbench-pi-openrouter", Environment: map[string]string{"HOME": "/tmp/hbench-home", "HB_MODEL": modelID, "HB_REASONING": profile.Reasoning}},
+		Execution:         controlled.Execution{Harness: "pi", HarnessVersion: "0.84.4", Provider: profile.Provider, Model: profile.Model, Reasoning: profile.Reasoning, Command: "hbench-pi-openrouter", Environment: map[string]string{"HOME": "/tmp/hbench-home", "HB_MODEL": modelID, "HB_REASONING": profile.Reasoning}},
 		Relay: controlled.Relay{
 			Upstream: "https://openrouter.ai", BaseURLEnv: "HB_MODEL_BASE_URL", SecretEnv: "OPENROUTER_API_KEY", AuthHeader: "Authorization", AuthScheme: "Bearer", DummyKeyEnv: "HB_MODEL_API_KEY",
 			AllowedModel: modelID, MaxRequestUSD: 0.02, MaxRequestBytes: 100000, MaxOutputTokens: 32768,
@@ -1162,7 +1403,11 @@ func cmdExecute(args []string) error {
 	if err != nil {
 		return err
 	}
-	if loop.HeadlessCommand(rec.Harness) == "" {
+	adapterLaunch := false
+	if profile, ok := rec.Metadata["profile"].(map[string]any); ok {
+		_, adapterLaunch = profile["adapter_manifest"].(string)
+	}
+	if loop.HeadlessCommand(rec.Harness) == "" && !adapterLaunch {
 		return fmt.Errorf("%s has no headless launch; stay in this directory and run: hbench finish %s", rec.Harness, id)
 	}
 	fmt.Printf("Executing run %s (this may spend tokens)\n", id)
@@ -1319,7 +1564,7 @@ func cmdPublish(args []string) error {
 		return err
 	}
 	if *preview {
-		payload, err := publish.BuildPayload(l, id)
+		payload, err := publish.SignedPayload(l, id)
 		if err != nil {
 			return err
 		}

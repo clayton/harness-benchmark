@@ -5,6 +5,7 @@ import (
 	"html"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/clayton/harness-benchmark/internal/loop"
@@ -13,10 +14,6 @@ import (
 )
 
 func Write(l paths.Layout) (string, int, error) { return write(l, "", nil, nil, "") }
-
-func WriteStudyRuns(l paths.Layout, studyID string, runIDs map[string]bool) (string, int, error) {
-	return write(l, studyID, runIDs, nil, "")
-}
 
 // WriteStudyComparison writes the local report for a frozen contract. It
 // includes per-arm repeat/cost completeness and a reproducible run command;
@@ -97,12 +94,13 @@ func renderStudySummary(m studycontract.Manifest, runs []loop.RunRecord, manifes
 	type armStats struct {
 		id                    string
 		runs, repeats, passed int
-		cost                  float64
-		costKnown             bool
+		cost, tokens, wall    float64
+		costKnown, tokenKnown bool
+		scenarioQuality       map[string][]float64
 	}
 	stats := make(map[string]*armStats, len(m.Arms))
 	for _, arm := range m.Arms {
-		stats[arm.ID] = &armStats{id: arm.ID}
+		stats[arm.ID] = &armStats{id: arm.ID, scenarioQuality: map[string][]float64{}}
 	}
 	for _, r := range runs {
 		armID := ""
@@ -114,10 +112,16 @@ func renderStudySummary(m studycontract.Manifest, runs []loop.RunRecord, manifes
 		}
 		s := stats[armID]
 		if s == nil {
-			s = &armStats{id: armID}
+			s = &armStats{id: armID, scenarioQuality: map[string][]float64{}}
 			stats[armID] = s
 		}
 		s.runs++
+		s.scenarioQuality[r.ScenarioID] = append(s.scenarioQuality[r.ScenarioID], loop.Quality(r))
+		if r.Telemetry.TotalTokens != nil && r.Telemetry.TokenComplete != nil && *r.Telemetry.TokenComplete {
+			s.tokens += float64(*r.Telemetry.TotalTokens)
+			s.tokenKnown = true
+		}
+		s.wall += float64(r.Telemetry.WallMS)
 		if r.Judges != nil {
 			s.repeats++
 		}
@@ -139,14 +143,36 @@ func renderStudySummary(m studycontract.Manifest, runs []loop.RunRecord, manifes
 		}
 	}
 	var table strings.Builder
-	table.WriteString(`<section><h2>Study comparison</h2><table><tr><th>arm</th><th>repeats</th><th>passed</th><th>cost</th><th>cost telemetry</th></tr>`)
+	table.WriteString(`<section><h2>Study comparison</h2><table><tr><th>arm</th><th>repeats</th><th>passed</th><th>cost</th><th>tokens</th><th>time ms</th><th>cost telemetry</th><th>token telemetry</th></tr>`)
 	for _, arm := range m.Arms {
 		s := stats[arm.ID]
 		cost := "incomplete"
 		if s.costKnown {
 			cost = fmt.Sprintf("$%.6f", s.cost)
 		}
-		fmt.Fprintf(&table, `<tr><td>%s</td><td>%d/%d</td><td>%d</td><td>%s</td><td>%s</td></tr>`, html.EscapeString(arm.ID), s.repeats, len(m.Scenarios)*m.Repeats, s.passed, html.EscapeString(cost), map[bool]string{true: "complete", false: "incomplete"}[s.costKnown])
+		tokens := "incomplete"
+		if s.tokenKnown {
+			tokens = fmt.Sprintf("%.0f", s.tokens)
+		}
+		fmt.Fprintf(&table, `<tr><td>%s</td><td>%d/%d</td><td>%d</td><td>%s</td><td>%s</td><td>%.0f</td><td>%s</td><td>%s</td></tr>`, html.EscapeString(arm.ID), s.repeats, len(m.Scenarios)*m.Repeats, s.passed, html.EscapeString(cost), html.EscapeString(tokens), s.wall, map[bool]string{true: "complete", false: "incomplete"}[s.costKnown], map[bool]string{true: "complete", false: "incomplete"}[s.tokenKnown])
+	}
+	table.WriteString(`</table><h3>Per-scenario quality and pass</h3><table><tr><th>arm</th><th>scenario</th><th>quality</th><th>passed</th></tr>`)
+	for _, arm := range m.Arms {
+		scenarios := make([]string, 0, len(stats[arm.ID].scenarioQuality))
+		for scenario := range stats[arm.ID].scenarioQuality {
+			scenarios = append(scenarios, scenario)
+		}
+		sort.Strings(scenarios)
+		for _, scenario := range scenarios {
+			values := stats[arm.ID].scenarioQuality[scenario]
+			passed := 0
+			for _, value := range values {
+				if value >= 1 {
+					passed++
+				}
+			}
+			fmt.Fprintf(&table, `<tr><td>%s</td><td>%s</td><td>%.2f</td><td>%d/%d</td></tr>`, html.EscapeString(arm.ID), html.EscapeString(scenario), average(values), passed, len(values))
+		}
 	}
 	table.WriteString(`</table>`)
 	if manifestPath == "" {
@@ -154,6 +180,17 @@ func renderStudySummary(m studycontract.Manifest, runs []loop.RunRecord, manifes
 	}
 	fmt.Fprintf(&table, `<p class="muted">Reproduce locally: <code>hbench study run %s --approve-spend</code></p></section>`, html.EscapeString(manifestPath))
 	return table.String()
+}
+
+func average(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	var total float64
+	for _, value := range values {
+		total += value
+	}
+	return total / float64(len(values))
 }
 
 func renderRun(r loop.RunRecord) string {

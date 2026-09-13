@@ -140,17 +140,16 @@ func Run(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath, rel
 		"-v", secretDir + ":/run/secrets:ro", "-v", accountingDir + ":/run/accounting:rw", "-e", "UPSTREAM=" + pack.Relay.Upstream,
 		"-e", "AUTH_HEADER=" + pack.Relay.AuthHeader, "-e", "AUTH_SCHEME=" + pack.Relay.AuthScheme,
 		"-e", "AUTH_FILE=/run/secrets/provider", "-e", "CLIENT_TOKEN_FILE=/run/secrets/client-token", "-e", "ACCOUNTING_FILE=/run/accounting/usage.json"}
-	if maxUSD, ok := budgetNumber(pack.Budget, "max_usd"); ok {
-		if pack.Relay.MaxRequestUSD <= 0 || pack.Relay.MaxRequestUSD > maxUSD || pack.Relay.AllowedModel == "" || pack.Relay.MaxRequestBytes <= 0 || pack.Relay.MaxOutputTokens <= 0 || pack.Relay.MaxPromptUSDPerMillion <= 0 || pack.Relay.MaxCompletionUSDPerMillion <= 0 || pack.Relay.MaxRequestUSD+1e-12 < minimumRequestUSD(pack.Relay) {
-			return RunResult{}, fmt.Errorf("capped relay requires model, request, token, price, and reservation bounds")
-		}
-		relayArgs = append(relayArgs,
-			"-e", fmt.Sprintf("MAX_USD=%.9f", maxUSD), "-e", fmt.Sprintf("MAX_REQUEST_USD=%.9f", pack.Relay.MaxRequestUSD),
-			"-e", "ALLOWED_MODEL="+pack.Relay.AllowedModel, "-e", fmt.Sprintf("MAX_REQUEST_BYTES=%d", pack.Relay.MaxRequestBytes),
-			"-e", fmt.Sprintf("MAX_OUTPUT_TOKENS=%d", pack.Relay.MaxOutputTokens),
-			"-e", fmt.Sprintf("MAX_PROMPT_USD_PER_MILLION=%.9f", pack.Relay.MaxPromptUSDPerMillion),
-			"-e", fmt.Sprintf("MAX_COMPLETION_USD_PER_MILLION=%.9f", pack.Relay.MaxCompletionUSDPerMillion))
+	maxUSD, ok := budgetNumber(pack.Budget, "max_usd")
+	if !ok || maxUSD <= 0 || pack.Relay.AllowedModel == "" || pack.Relay.AllowedModel != pack.Execution.Model || pack.Relay.MaxRequestUSD <= 0 || pack.Relay.MaxRequestUSD > maxUSD || pack.Relay.MaxRequestBytes <= 0 || pack.Relay.MaxOutputTokens <= 0 || pack.Relay.MaxPromptUSDPerMillion <= 0 || pack.Relay.MaxCompletionUSDPerMillion <= 0 || pack.Relay.MaxRequestUSD+1e-12 < minimumRequestUSD(pack.Relay) {
+		return RunResult{}, fmt.Errorf("controlled relay requires model-bound and bounded requests")
 	}
+	relayArgs = append(relayArgs,
+		"-e", "ALLOWED_MODEL="+pack.Relay.AllowedModel, "-e", fmt.Sprintf("MAX_REQUEST_BYTES=%d", pack.Relay.MaxRequestBytes),
+		"-e", fmt.Sprintf("MAX_OUTPUT_TOKENS=%d", pack.Relay.MaxOutputTokens),
+		"-e", fmt.Sprintf("MAX_PROMPT_USD_PER_MILLION=%.9f", pack.Relay.MaxPromptUSDPerMillion),
+		"-e", fmt.Sprintf("MAX_COMPLETION_USD_PER_MILLION=%.9f", pack.Relay.MaxCompletionUSDPerMillion),
+		"-e", fmt.Sprintf("MAX_USD=%.9f", maxUSD), "-e", fmt.Sprintf("MAX_REQUEST_USD=%.9f", pack.Relay.MaxRequestUSD))
 	relayArgs = append(relayArgs, relayImage)
 	relayCommand := exec.CommandContext(ctx, rt.Command, relayArgs...)
 	if output, err := relayCommand.CombinedOutput(); err != nil {
@@ -189,8 +188,9 @@ func Run(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath, rel
 	judgeOutput, judgeErr := dockerRun(ctx, rt, "none", workspace, packPath, pack.EnvironmentImageDigest, pack.EvaluatorCommands, nil)
 	telemetry := loop.ExtractTelemetry(pack.Execution.Harness, logPath)
 	telemetry.WallMS = wallMS
+	applyConfiguredPricing(&telemetry, pack.Execution.Pricing)
 	accounting := relayAccounting{}
-	if raw, readErr := os.ReadFile(filepath.Join(accountingDir, "usage.json")); readErr == nil && json.Unmarshal(raw, &accounting) == nil {
+	if raw, readErr := os.ReadFile(filepath.Join(accountingDir, "usage.json")); readErr == nil && json.Unmarshal(raw, &accounting) == nil && (accounting.PricedRequests > 0 || accounting.Exceeded) {
 		telemetry.EstimatedUSD = &accounting.EstimatedUSD
 		telemetry.Complete = &accounting.Complete
 		if telemetry.UsageByAgent != nil && len(*telemetry.UsageByAgent) == 1 {
@@ -223,9 +223,20 @@ func Run(ctx context.Context, scenario corpus.Scenario, pack Pack, packPath, rel
 		"passed": passed, "checks": []map[string]any{{"name": "private_evaluator", "passed": passed}},
 		"execution_exit_ok": executionErr == nil, "evaluator_output_sha256": sha256String(judgeOutput),
 	}
+	config := map[string]any{
+		"workflow": "baseline", "skills": []string{}, "interaction": "unattended", "budget": pack.Budget, "network": "none",
+		"provider": pack.Execution.Provider, "reasoning": pack.Execution.Reasoning,
+		"environment_image_digest": pack.EnvironmentImageDigest, "relay_image_digest": pack.RelayImageDigest, "runtime": rt,
+	}
+	if len(pack.Execution.Extensions) > 0 {
+		config["extensions"] = pack.Execution.Extensions
+	}
+	if len(pack.Execution.Plugins) > 0 {
+		config["plugins"] = pack.Execution.Plugins
+	}
 	payload := map[string]any{
 		"kind": "controlled_run", "attestation_id": runID, "scenario": scenarioClaim(scenario, pack, packDigest),
-		"config": map[string]any{"workflow": "baseline", "skills": []string{}, "interaction": "unattended", "budget": pack.Budget, "network": "none", "environment_image_digest": pack.EnvironmentImageDigest, "relay_image_digest": pack.RelayImageDigest, "runtime": rt},
+		"config": config,
 		"run": map[string]any{
 			"id": runID, "status": status, "harness": pack.Execution.Harness, "harness_version": pack.Execution.HarnessVersion,
 			"model": pack.Execution.Model, "model_version": pack.Execution.ModelVersion,
@@ -250,9 +261,31 @@ func newID(prefix string) string {
 }
 
 type relayAccounting struct {
-	EstimatedUSD float64 `json:"estimated_usd"`
-	Complete     bool    `json:"complete"`
-	Exceeded     bool    `json:"exceeded"`
+	EstimatedUSD   float64 `json:"estimated_usd"`
+	Complete       bool    `json:"complete"`
+	Exceeded       bool    `json:"exceeded"`
+	PricedRequests int     `json:"priced_requests"`
+}
+
+func applyConfiguredPricing(telemetry *loop.Telemetry, pricing Pricing) {
+	if pricing.Snapshot == "" || telemetry.TokensIn == nil || telemetry.TokensOut == nil {
+		return
+	}
+	cost := (float64(*telemetry.TokensIn)*pricing.PromptUSDPerMillion + float64(*telemetry.TokensOut)*pricing.CompletionUSDPerMillion) / 1_000_000
+	if telemetry.CacheReadTokens != nil {
+		cost += float64(*telemetry.CacheReadTokens) * pricing.CacheReadUSDPerMillion / 1_000_000
+	}
+	if telemetry.CacheWriteTokens != nil {
+		cost += float64(*telemetry.CacheWriteTokens) * pricing.CacheWriteUSDPerMillion / 1_000_000
+	}
+	complete := true
+	telemetry.EstimatedUSD = &cost
+	telemetry.Complete = &complete
+	telemetry.CostKind = "estimated"
+	telemetry.PriceSnapshot = pricing.Snapshot
+	if telemetry.UsageByAgent != nil && len(*telemetry.UsageByAgent) == 1 {
+		(*telemetry.UsageByAgent)[0].EstimatedUSD = &cost
+	}
 }
 
 func budgetNumber(budget map[string]any, key string) (float64, bool) {

@@ -1,10 +1,19 @@
-# hb.study.v1
+# hb.study.v2
 
 Required fields are `schema`, `id`, `question`, `comparison_mode`, `scenarios`, `arms`, `varied_axes`, `repeats`, `seed`, `judge_protocol`, `win_rule`, and `budget.max_minutes_per_run`.
 
-`win_rule` is currently the fixed identifier `callout-title-v1`. It ranks reliability first, then quality, then complete cost and token efficiency.
+`win_rule` is currently the fixed identifier `callout-title-v1`. It ranks reliability first, then quality, then complete cost and token efficiency. Existing `hb.study.v1` contracts remain valid.
 
-Each public Study scenario must use the publishable Agent Rodeo form `rodeo:slug@version` and the 64-character `manifest_digest` returned by that version's public manifest. A private Study may use a local YAML scenario path and a trusted digest for local execution, but it cannot be uploaded as a public Study or Callout. Each arm names its harness, exact `harness_version`, model, and any provider, reasoning level, workflow, skills, extensions, plugins, tools, subagent topology, environment, and network policy. The harness version must match the installed harness `--version` output.
+A public Study scenario can use either:
+
+- `rodeo:slug@version` plus the 64-character `manifest_digest` returned by the public manifest; or
+- an embedded, immutable `hb.task.v1` object derived from a local scenario with a public HTTPS repository and fixed 40- or 64-character commit.
+
+The task digest covers canonical task JSON. Task contracts reject unknown fields, credentials, private hosts, machine paths, unbounded commands, excessive nesting, and oversized strings or collections. They contain only public setup and acceptance commands; hidden evaluator material and target patches are never embedded.
+
+Each v2 arm names its `mode`, harness, exact `harness_version`, model, and any provider, model version, reasoning level, workflow, skills, extensions, plugins, tools, subagent topology, environment, network policy, prompt treatment, adapter, and enforcement assurance. Local skill directories appear in the public contract only as content hashes. hbench stores their machine paths separately in a mode-0600 `hb-out/studies/*.inputs.json` sidecar. The harness version must match the installed harness `--version` output.
+
+External adapters use `hb.adapter.v1`. Their command is an argument array with only `${prompt}`, `${prompt_file}`, and `${workspace}` placeholders. Shell interpreters are rejected. The manifest and version are hashed into the setup.
 
 Scenario manifests can declare command prerequisites under `requirements.commands` and approved input classes under `fetches`. A ride never installs prerequisites. `hbench doctor -s <scenario>` reports missing commands and minimum-version failures. Pinned source repositories and lockfile-pinned project dependencies can be fetched only after consent to an immutable fetch-plan digest.
 

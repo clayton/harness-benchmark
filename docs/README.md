@@ -7,5 +7,5 @@
 | [../DESIGN.md](../DESIGN.md) | Architecture, fairness, contamination, versioning |
 | [../WISHLIST.md](../WISHLIST.md) | Features not built yet |
 | [../scenarios/README.md](../scenarios/README.md) | Scenario authoring and local validation |
-| [../vendor/README.md](../vendor/README.md) | Pinning experiment dependencies |
+| [../experiment-deps/README.md](../experiment-deps/README.md) | Pinning experiment dependencies |
 | [../adapters/README.md](../adapters/README.md) | Future harness adapters |

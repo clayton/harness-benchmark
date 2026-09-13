@@ -4,7 +4,7 @@
 # Read this file before piping it to sh.
 set -eu
 
-TAG="v0.6.0"
+TAG="v0.7.0"
 REPO="https://github.com/clayton/harness-benchmark"
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -20,10 +20,10 @@ OTHER_HB=""
 # Pinned in this script. GitHub hosts the binary; we do not fetch SUMS from it.
 expected_sha() {
   case $1 in
-    hbench-darwin-amd64) echo "4e4be50f8b51d1de76e1ca448f8119dd99c54aaa806389dbf96fd0ea47bddb49" ;;
-    hbench-darwin-arm64) echo "d91315de76713710a5c90cd28cec538d5ae2a23c5a58d27d8dd2d7d67c1bbf2a" ;;
-    hbench-linux-amd64) echo "e6c33e14898a6698ed5368a82f00c1d16ca49ddf8783d6c1e549bcbe879f8baf" ;;
-    hbench-linux-arm64) echo "c203c84972a60978996020b306ffb5455185d5e5827b1ef81a19a1fccf94d28a" ;;
+    hbench-darwin-amd64) echo "a86d842273f54d4c0b6ff0ea2857fcf9579ed675036d0b84d84da386165eee1a" ;;
+    hbench-darwin-arm64) echo "db26cb4abedd725dbdbedd4e83bc6205afb7fe22b2f26a700f6ed0cdf2fd4725" ;;
+    hbench-linux-amd64) echo "683a024910ad65c0987f45a1012bbe222c0b71dda80df78824eab944eb3830a7" ;;
+    hbench-linux-arm64) echo "3fa01a56a309847967bcbe2b1ae1bab44b5de490021950548e472fd6832a3544" ;;
     *) return 1 ;;
   esac
 }
@@ -172,24 +172,6 @@ install_from_release() {
   echo "verified SHA-256 $got"
 }
 
-install_from_source() {
-  if ! command -v go >/dev/null 2>&1; then
-    echo "hbench: no pinned $TAG binary and go is not installed" >&2
-    return 1
-  fi
-  here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-  if [ -f "$here/cmd/hb/main.go" ]; then
-    (cd "$here" && go build -mod=mod -o "$BIN" ./cmd/hb)
-    echo "built from local source (no release checksum)"
-    return
-  fi
-  tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
-  git clone --depth 1 --branch "$TAG" "$REPO.git" "$tmp/src"
-  (cd "$tmp/src" && go build -mod=mod -o "$BIN" ./cmd/hb)
-  echo "built $TAG from source (no release checksum)"
-}
-
 rc_file() {
   case $(basename "${SHELL:-sh}") in
     zsh) echo "$HOME/.zshrc" ;;
@@ -223,8 +205,8 @@ persist_path() {
 }
 
 if ! install_from_release; then
-  echo "hbench: pinned $TAG download failed, building from source…"
-  install_from_source
+  echo "hbench: verified $TAG installation failed; nothing was installed" >&2
+  exit 1
 fi
 
 ver="unknown"

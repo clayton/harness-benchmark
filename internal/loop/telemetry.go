@@ -235,7 +235,8 @@ func grokTelemetry(raw []byte) Telemetry {
 type piLogLine struct {
 	Type    string `json:"type"`
 	Message struct {
-		Usage *struct {
+		Provider string `json:"provider"`
+		Usage    *struct {
 			Total      *int `json:"totalTokens"`
 			Input      *int `json:"input"`
 			Output     *int `json:"output"`
@@ -253,6 +254,7 @@ func piTelemetry(raw []byte) Telemetry {
 	input, output, reasoning := 0, 0, 0
 	cacheRead, cacheWrite, turns := 0, 0, 0
 	nativeTotal := 0
+	cursorUsage := false
 	cost := 0.0
 	costSeen := false
 	children := map[string]AgentUsage{}
@@ -271,6 +273,7 @@ func piTelemetry(raw []byte) Telemetry {
 			continue
 		}
 		usage := event.Message.Usage
+		cursorUsage = cursorUsage || event.Message.Provider == "cursor"
 		if usage.Input != nil {
 			input += *usage.Input
 		}
@@ -280,7 +283,7 @@ func piTelemetry(raw []byte) Telemetry {
 		reasoning += usage.Reasoning
 		cacheRead += usage.CacheRead
 		cacheWrite += usage.CacheWrite
-		if usage.Total != nil && *usage.Total > 0 {
+		if !cursorUsage && usage.Total != nil && *usage.Total > 0 {
 			nativeTotal += *usage.Total
 		}
 		turns++
@@ -325,7 +328,9 @@ func piTelemetry(raw []byte) Telemetry {
 		Complete:         &complete,
 		UsageByAgent:     agentUsagePointer(usageByAgent),
 	}
-	if nativeTotal > 0 {
+	if cursorUsage {
+		t.TotalTokens = intPointer(input + output + cacheRead + cacheWrite)
+	} else if nativeTotal > 0 {
 		t.TotalTokens = intPointer(nativeTotal)
 	}
 	if costSeen {

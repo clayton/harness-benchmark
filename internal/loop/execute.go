@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/clayton/harness-benchmark/internal/adapter"
 	"github.com/clayton/harness-benchmark/internal/paths"
 )
 
@@ -50,7 +51,30 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	if resolveErr != nil {
 		return ExecResult{}, resolveErr
 	}
-	launch := HeadlessLaunchProfile(resolvedProfile, strings.TrimSpace(string(promptRaw)))
+	prompt := strings.TrimSpace(string(promptRaw))
+	var launch LaunchSpec
+	telemetryHarness := rec.Harness
+	if profile.AdapterManifest != "" || len(profile.Adapter) > 0 {
+		var manifest adapter.Manifest
+		var digest string
+		var loadErr error
+		if profile.AdapterManifest != "" {
+			manifest, digest, loadErr = adapter.Load(profile.AdapterManifest)
+		} else {
+			manifest, digest, loadErr = adapter.FromMap(profile.Adapter)
+		}
+		if loadErr != nil {
+			return ExecResult{}, loadErr
+		}
+		if profile.AdapterDigest != "" && profile.AdapterDigest != digest {
+			return ExecResult{}, fmt.Errorf("adapter manifest digest drift")
+		}
+		program, args := adapter.Launch(manifest, prompt, rec.Worktree)
+		launch = LaunchSpec{Program: program, Args: args}
+		telemetryHarness = manifest.Telemetry
+	} else {
+		launch = HeadlessLaunchProfile(resolvedProfile, prompt)
+	}
 	if launch.Program == "" {
 		if rec.Model != "" && !modelIDPattern.MatchString(rec.Model) {
 			return ExecResult{}, fmt.Errorf("invalid model id %q", rec.Model)
@@ -60,14 +84,17 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	if _, err := os.Stat(rec.Worktree); err != nil {
 		return ExecResult{}, fmt.Errorf("workspace missing: %s", rec.Worktree)
 	}
-	actualVersion := DetectHarnessVersion(rec.Harness)
-	if actualVersion == "" {
-		return ExecResult{}, fmt.Errorf("could not resolve %s harness version", rec.Harness)
+	actualVersion := rec.HarnessVersion
+	if profile.AdapterManifest == "" && len(profile.Adapter) == 0 {
+		actualVersion = DetectHarnessVersion(rec.Harness)
+		if actualVersion == "" {
+			return ExecResult{}, fmt.Errorf("could not resolve %s harness version", rec.Harness)
+		}
+		if rec.HarnessVersion != "" && rec.HarnessVersion != actualVersion {
+			return ExecResult{}, fmt.Errorf("%s harness version drift: contract has %q, installed binary is %q", rec.Harness, rec.HarnessVersion, actualVersion)
+		}
+		rec.HarnessVersion = actualVersion
 	}
-	if rec.HarnessVersion != "" && rec.HarnessVersion != actualVersion {
-		return ExecResult{}, fmt.Errorf("%s harness version drift: contract has %q, installed binary is %q", rec.Harness, rec.HarnessVersion, actualVersion)
-	}
-	rec.HarnessVersion = actualVersion
 	if rec.Metadata == nil {
 		rec.Metadata = map[string]any{}
 	}
@@ -125,7 +152,10 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 	}
 	wall := int(time.Since(start).Milliseconds())
 	closeErr := logF.Close()
-	rec.Telemetry = ExtractTelemetry(rec.Harness, logPath)
+	if telemetryHarness == "" {
+		telemetryHarness = rec.Harness
+	}
+	rec.Telemetry = ExtractTelemetry(telemetryHarness, logPath)
 	if rec.Harness == "pi" {
 		piHome := filepath.Join(l.RunDir(id), "harness-home", "pi")
 		if !completePiLocalCost(&rec.Telemetry, filepath.Join(piHome, "models.json"), profile.Provider, profile.Model) {

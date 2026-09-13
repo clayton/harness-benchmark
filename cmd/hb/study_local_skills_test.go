@@ -7,8 +7,129 @@ import (
 	"testing"
 
 	"github.com/clayton/harness-benchmark/internal/loop"
+	"github.com/clayton/harness-benchmark/internal/paths"
 	studycontract "github.com/clayton/harness-benchmark/internal/study"
 )
+
+func TestPublicLocalStudyInitEmbedsPathFreeExecutableTask(t *testing.T) {
+	dir := t.TempDir()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(old) })
+	t.Setenv("HOME", t.TempDir())
+	scenarioPath := filepath.Join(dir, "private-local-name.yaml")
+	scenario := `id: public-demo
++type: bugfix
++title: Public demo
++description: Reproducible task
++language: go
++difficulty: easy
++tags: [go]
++repo:
++  url: https://github.com/example/project.git
++  base_ref: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
++  gold_ref: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
++prompt: Fix the regression.
++acceptance:
++  setup_commands: ["go mod download"]
++  test_commands: ["go test ./..."]
++  build_commands: []
++  fail_to_pass: ["regression"]
++`
+	scenario = strings.ReplaceAll(scenario, "\n+", "\n")
+	if err := os.WriteFile(scenarioPath, []byte(scenario), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "study.yaml")
+	if err := initStudy([]string{"--question", "Which model?", "--scenario", scenarioPath, "--harness", "manual", "--model", "one", "--model", "two", "--out", out}); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := studycontract.Load(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Schema != studycontract.SchemaV2 || len(manifest.Scenarios) != 1 {
+		t.Fatalf("manifest=%+v", manifest)
+	}
+	frozen := manifest.Scenarios[0]
+	if !strings.HasPrefix(frozen.ID, "local:") || strings.Contains(string(mustRead(t, out)), scenarioPath) {
+		t.Fatalf("public contract leaked path: %s", mustRead(t, out))
+	}
+	resolved, err := resolveFrozenStudyScenario(paths.New(dir, dir), frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ID != frozen.ID || resolved.Prompt != "Fix the regression." || resolved.Repo.GoldRef != strings.Repeat("b", 40) || resolved.Acceptance.TestCommands[0] != "go test ./..." {
+		t.Fatalf("resolved=%+v", resolved)
+	}
+	if err := verifyStudyScenario(resolved, frozen); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestPublicStudyKeepsLocalSkillPathsOnlyInSecureSidecar(t *testing.T) {
+	root := t.TempDir()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(old) })
+	skill := filepath.Join(root, "private-skill")
+	if err := os.MkdirAll(skill, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skill, "SKILL.md"), []byte("public content\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := loop.LocalSkillDigest(skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := studycontract.Manifest{Schema: studycontract.SchemaV2, ID: "local-skill-study", Question: "Which wins?", ComparisonMode: "controlled",
+		Scenarios: []studycontract.Scenario{{ID: "rodeo:task@1", Digest: strings.Repeat("a", 64)}},
+		Arms: []studycontract.Arm{
+			{ID: "a", Mode: "personal", Harness: "pi", Version: "test", Model: "one", LocalSkills: []string{skill}, LocalSkillDigests: []string{digest}},
+			{ID: "b", Mode: "personal", Harness: "pi", Version: "test", Model: "two"},
+		}, VariedAxes: []string{"model", "skills"}, Repeats: 1, Seed: 1, JudgeProtocol: "default", WinRule: studycontract.WinRule, Budget: studycontract.Budget{MaxMinutes: 45}}
+	if err := m.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := saveStudyLocalInputs(m); err != nil {
+		t.Fatal(err)
+	}
+	public := publicStudyManifest(m)
+	if len(public.Arms[0].LocalSkills) != 0 || len(public.Arms[0].LocalSkillDigests) != 1 {
+		t.Fatalf("public arm=%+v", public.Arms[0])
+	}
+	hydrated, err := loadStudyLocalInputs(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hydrated.Arms[0].LocalSkills[0] != skill {
+		t.Fatalf("hydrated arm=%+v", hydrated.Arms[0])
+	}
+	info, err := os.Stat(studyLocalInputsPath(m))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("sidecar mode=%v err=%v", info.Mode().Perm(), err)
+	}
+}
 
 func TestStudyLocalSkillDriftStopsBeforeExecution(t *testing.T) {
 	dir := t.TempDir()

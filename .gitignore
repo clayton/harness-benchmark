@@ -39,10 +39,9 @@ reports/*
 # Cloned scenario workspaces (large; re-fetch via scripts / hb prepare)
 workspaces/
 
-# Vendored experiment deps (large clones; see vendor/README.md)
-vendor/superpowers/
-vendor/*/
-!vendor/README.md
+# Cloned experiment dependencies (large; see experiment-deps/README.md)
+experiment-deps/*/
+!experiment-deps/README.md
 
 # Occasional local dumps
 *.log

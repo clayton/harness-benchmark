@@ -1,0 +1,25 @@
+#!/bin/sh
+set -eu
+
+: "${HB_MODEL:?HB_MODEL is required}"
+: "${HB_MODEL_BASE_URL:?HB_MODEL_BASE_URL is required}"
+: "${HB_MODEL_API_KEY:?HB_MODEL_API_KEY is required}"
+
+case "$HB_MODEL" in
+  *[!A-Za-z0-9._/:@+-]*|'') echo "invalid HB_MODEL" >&2; exit 2 ;;
+esac
+
+export CURSOR_BACKEND_URL="$HB_MODEL_BASE_URL"
+export CURSOR_API_KEY="$HB_MODEL_API_KEY"
+export PI_CURSOR_HTTP_1_1=true
+export PI_CURSOR_SETTING_SOURCES=none
+export PI_CURSOR_PI_TOOL_BRIDGE=1
+export PI_CURSOR_EXPOSE_BUILTIN_TOOLS=1
+export PI_CURSOR_ASK_QUESTION=0
+
+exec pi -p --mode json --approve --no-skills --no-session \
+  -e /usr/local/lib/node_modules/pi-cursor-sdk \
+  --provider cursor --model "$HB_MODEL" --api-key "$HB_MODEL_API_KEY" \
+  --cursor-no-fast --cursor-no-local-resume \
+  --append-system-prompt "UNATTENDED BENCHMARK MODE: Do not ask questions. Work only in /workspace. Use the exposed pi__ tools for all file and command operations; do not use Cursor-native tools. Implement the requested fix, verify it, then stop." \
+  "$(cat HB_PROMPT.txt)"

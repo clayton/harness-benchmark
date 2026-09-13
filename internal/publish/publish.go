@@ -2,8 +2,13 @@ package publish
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net"
@@ -14,8 +19,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/clayton/harness-benchmark/internal/adapter"
 	"github.com/clayton/harness-benchmark/internal/loop"
 	"github.com/clayton/harness-benchmark/internal/paths"
+	studycontract "github.com/clayton/harness-benchmark/internal/study"
 )
 
 const defaultRodeoURL = "https://agentrodeo.dev"
@@ -36,13 +43,134 @@ func RiderFile(origin string) string {
 	return filepath.Join(home, ".config", "hb", "riders", digest+".json")
 }
 
+func PublisherKeyFile(origin string) string {
+	home, _ := os.UserHomeDir()
+	digest := fmt.Sprintf("%x", sha256.Sum256([]byte(origin)))
+	return filepath.Join(home, ".config", "hb", "publishers", digest+".pem")
+}
+
+func SignedPayload(l paths.Layout, id string) (map[string]any, error) {
+	payload, err := BuildPayload(l, id)
+	if err != nil {
+		return nil, err
+	}
+	origin, err := ValidatedRodeoURL()
+	if err != nil {
+		return nil, err
+	}
+	key, public, err := publisherKey(origin)
+	if err != nil {
+		return nil, err
+	}
+	// The server signs exactly this envelope; keep schema metadata outside it.
+	canonical, err := canonicalJSON(map[string]any{"run": payload["run"], "snapshot": payload["snapshot"]})
+	if err != nil {
+		return nil, err
+	}
+	sig := ed25519.Sign(key, canonical)
+	payload["evidence"] = map[string]any{"schema": "hb.evidence.v1", "public_key": string(public), "signature": base64.StdEncoding.EncodeToString(sig), "payload_sha256": fmt.Sprintf("%x", sha256.Sum256(canonical)), "canonical_payload": string(canonical)}
+	return payload, nil
+}
+
+func canonicalJSON(value any) ([]byte, error) {
+	var b bytes.Buffer
+	e := json.NewEncoder(&b)
+	e.SetEscapeHTML(false)
+	if err := e.Encode(value); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(b.Bytes(), []byte("\n")), nil
+}
+
+func publisherKey(origin string) (ed25519.PrivateKey, []byte, error) {
+	path := PublisherKeyFile(origin)
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return nil, nil, fmt.Errorf("publisher key is not a regular file")
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, nil, fmt.Errorf("open publisher key: %w", err)
+		}
+		defer file.Close()
+		opened, err := file.Stat()
+		current, pathErr := os.Lstat(path)
+		if err != nil || pathErr != nil || !opened.Mode().IsRegular() || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
+			return nil, nil, fmt.Errorf("publisher key changed while opening")
+		}
+		if opened.Mode().Perm() != 0o600 {
+			if err := file.Chmod(0o600); err != nil {
+				return nil, nil, fmt.Errorf("secure publisher key: %w", err)
+			}
+		}
+		raw, err := io.ReadAll(io.LimitReader(file, 16*1024+1))
+		if err != nil {
+			return nil, nil, fmt.Errorf("read publisher key: %w", err)
+		}
+		if len(raw) > 16*1024 {
+			return nil, nil, fmt.Errorf("publisher key is too large")
+		}
+		block, _ := pem.Decode(raw)
+		if block == nil || block.Type != "PRIVATE KEY" {
+			return nil, nil, fmt.Errorf("invalid publisher key PEM")
+		}
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse publisher key: %w", err)
+		}
+		private, ok := key.(ed25519.PrivateKey)
+		if !ok || len(private) != ed25519.PrivateKeySize {
+			return nil, nil, fmt.Errorf("publisher key is not Ed25519")
+		}
+		pub, err := x509.MarshalPKIXPublicKey(private.Public())
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal publisher key: %w", err)
+		}
+		return private, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub}), nil
+	} else if !os.IsNotExist(err) {
+		return nil, nil, fmt.Errorf("inspect publisher key: %w", err)
+	}
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	raw, _ := x509.MarshalPKCS8PrivateKey(private)
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return nil, nil, err
+	}
+	if err := os.Chmod(directory, 0o700); err != nil {
+		return nil, nil, err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create publisher key: %w", err)
+	}
+	encoded := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: raw})
+	if _, err := file.Write(encoded); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return nil, nil, err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return nil, nil, err
+	}
+	if err := file.Close(); err != nil {
+		return nil, nil, err
+	}
+	pub, _ := x509.MarshalPKIXPublicKey(public)
+	return private, pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: pub}), nil
+}
+
 func Publish(l paths.Layout, id string, client *http.Client) (map[string]any, error) {
 	origin, err := ValidatedRodeoURL()
 	if err != nil {
 		return nil, err
 	}
 	client = noRedirectClient(client)
-	payload, err := BuildPayload(l, id)
+	payload, err := SignedPayload(l, id)
 	if err != nil {
 		return nil, err
 	}
@@ -173,14 +301,26 @@ func BuildPayload(l paths.Layout, id string) (map[string]any, error) {
 	run := map[string]any{
 		"id": rec.ID, "scenario_id": rec.ScenarioID, "config_id": rec.ConfigID,
 		"status": rec.Status, "harness": rec.Harness, "harness_version": rec.HarnessVersion,
-		"model": rec.Model, "judges": judges, "telemetry": telemetry,
+		"model": rec.Model, "model_version": rec.ModelVersion, "judges": judges, "telemetry": telemetry,
 		"metadata": map[string]any{"workflow": workflow, "interaction": interaction},
+	}
+	if patch, readErr := os.ReadFile(filepath.Join(l.RunDir(id), "patch.diff")); readErr == nil {
+		if len(patch) > 1<<20 {
+			return nil, fmt.Errorf("patch artifact exceeds 1 MiB")
+		}
+		run["patch_artifact"] = string(patch)
 	}
 	snapshot := map[string]any{}
 	if raw, readErr := os.ReadFile(filepath.Join(l.RunDir(id), "snapshot.json")); readErr == nil {
 		var source map[string]any
 		if json.Unmarshal(raw, &source) == nil {
 			snapshot["prompt_sha256_16"] = source["prompt_sha256_16"]
+			if task, ok := source["task"].(map[string]any); ok {
+				if err := studycontract.ValidatePublicTask(task); err != nil {
+					return nil, fmt.Errorf("public task is unsafe: %w", err)
+				}
+				snapshot["task"] = task
+			}
 			if study, ok := source["study"].(map[string]any); ok {
 				snapshot["study"] = study
 			}
@@ -188,6 +328,19 @@ func BuildPayload(l paths.Layout, id string) (map[string]any, error) {
 				snapshot["repo"] = map[string]any{"base_ref": repo["base_ref"], "gold_ref": repo["gold_ref"]}
 			}
 			if config, ok := source["config"].(map[string]any); ok {
+				if rawAdapter, present := config["adapter"]; present && meaningfulPublicConfigValue(rawAdapter) {
+					adapterValue, ok := rawAdapter.(map[string]any)
+					if !ok {
+						return nil, fmt.Errorf("public adapter must be an object")
+					}
+					_, digest, err := adapter.FromMap(adapterValue)
+					if err != nil {
+						return nil, fmt.Errorf("public adapter is unsafe: %w", err)
+					}
+					if declared, _ := config["adapter_sha256"].(string); declared != "" && declared != digest {
+						return nil, fmt.Errorf("public adapter digest does not match")
+					}
+				}
 				publicConfig := map[string]any{
 					"id": config["id"], "mode": config["mode"], "harness": config["harness"], "model": config["model"],
 					"workflow": config["workflow"], "skills": config["skills"], "interaction": config["interaction"],
@@ -195,7 +348,7 @@ func BuildPayload(l paths.Layout, id string) (map[string]any, error) {
 				if judgeProtocol, _ := config["judge_protocol"].(string); judgeProtocol != "" {
 					publicConfig["judge_protocol"] = judgeProtocol
 				}
-				for _, key := range []string{"harness_version", "provider", "reasoning", "extensions", "plugins", "tools", "subagent_topology", "frozen_skills", "config_sha256", "config_status", "budget", "environment", "network", "relay_image_digest", "runtime"} {
+				for _, key := range []string{"harness_version", "provider", "model_version", "reasoning", "extensions", "plugins", "tools", "subagent_topology", "frozen_skills", "config_sha256", "config_status", "budget", "environment", "network", "relay_image_digest", "runtime", "adapter", "adapter_sha256", "assurance", "prompt_treatment"} {
 					if meaningfulPublicConfigValue(config[key]) {
 						if key == "frozen_skills" {
 							publicConfig[key] = publicFrozenSkills(config[key])

@@ -31,6 +31,11 @@ type Profile struct {
 	HarnessVersion  string         `json:"harness_version,omitempty"`
 	Provider        string         `json:"provider,omitempty"`
 	Model           string         `json:"model"`
+	ModelVersion    string         `json:"model_version,omitempty"`
+	PromptTreatment map[string]any `json:"prompt_treatment,omitempty"`
+	Adapter         map[string]any `json:"adapter,omitempty"`
+	Assurance       map[string]any `json:"assurance,omitempty"`
+	Task            map[string]any `json:"task,omitempty"`
 	Reasoning       string         `json:"reasoning,omitempty"`
 	Workflow        string         `json:"workflow,omitempty"`
 	Skills          []string       `json:"skills,omitempty"`
@@ -45,6 +50,8 @@ type Profile struct {
 	Subagents       string         `json:"subagent_topology,omitempty"`
 	Environment     string         `json:"environment,omitempty"`
 	Network         string         `json:"network,omitempty"`
+	AdapterManifest string         `json:"adapter_manifest,omitempty"`
+	AdapterDigest   string         `json:"adapter_sha256,omitempty"`
 	JudgeProtocol   string         `json:"judge_protocol,omitempty"`
 	Budget          map[string]any `json:"budget,omitempty"`
 	StudyID         string         `json:"study_id,omitempty"`
@@ -122,6 +129,7 @@ func CreateRunWithProfile(l paths.Layout, sc corpus.Scenario, profile Profile, r
 		Harness:        profile.Harness,
 		HarnessVersion: profile.HarnessVersion,
 		Model:          profile.Model,
+		ModelVersion:   profile.ModelVersion,
 		Metadata: map[string]any{
 			"workflow":         profile.Workflow,
 			"skills":           snapshotSkills,
@@ -148,6 +156,11 @@ func CreateRunWithProfile(l paths.Layout, sc corpus.Scenario, profile Profile, r
 			"harness_version":   profile.HarnessVersion,
 			"provider":          profile.Provider,
 			"model":             profile.Model,
+			"model_version":     profile.ModelVersion,
+			"prompt_treatment":  profile.PromptTreatment,
+			"adapter":           profile.Adapter,
+			"adapter_sha256":    profile.AdapterDigest,
+			"assurance":         profile.Assurance,
 			"reasoning":         profile.Reasoning,
 			"workflow":          profile.Workflow,
 			"skills":            snapshotSkills,
@@ -169,6 +182,9 @@ func CreateRunWithProfile(l paths.Layout, sc corpus.Scenario, profile Profile, r
 			"base_ref": sc.Repo.BaseRef,
 			"gold_ref": sc.Repo.GoldRef,
 		},
+	}
+	if len(profile.Task) > 0 {
+		snap["task"] = profile.Task
 	}
 	if profile.StudyID != "" {
 		snap["study"] = map[string]any{
@@ -467,8 +483,11 @@ func ValidateMeasuredProfile(p Profile) error {
 	if p.Environment != "" {
 		return fmt.Errorf("%s adapter cannot enforce environment=%q in local study execution", p.Harness, p.Environment)
 	}
-	if len(p.Tools) > 0 {
+	if len(p.Tools) > 0 && p.AdapterManifest == "" && len(p.Adapter) == 0 {
 		return fmt.Errorf("%s adapter cannot lock declared tools", p.Harness)
+	}
+	if p.AdapterManifest != "" || len(p.Adapter) > 0 {
+		return nil
 	}
 	switch p.Harness {
 	case "codex":

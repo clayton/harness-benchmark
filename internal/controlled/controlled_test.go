@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/clayton/harness-benchmark/internal/corpus"
+	"github.com/clayton/harness-benchmark/internal/loop"
 )
 
 func TestSelectRuntimeAutoAndExplicit(t *testing.T) {
@@ -40,6 +41,20 @@ func TestMinimumRequestUSDIncludesInputAndOutputBounds(t *testing.T) {
 	relay := Relay{MaxRequestBytes: 100000, MaxOutputTokens: 32768, MaxPromptUSDPerMillion: 0.075, MaxCompletionUSDPerMillion: 0.25}
 	if got := minimumRequestUSD(relay); got < 0.0156919 || got > 0.0156921 {
 		t.Fatalf("minimumRequestUSD=%f", got)
+	}
+}
+
+func TestConfiguredPricingCompletesEstimatedCost(t *testing.T) {
+	input, output, cacheRead, cacheWrite := 1_000, 100, 500, 50
+	complete := false
+	usage := []loop.AgentUsage{{AgentID: "parent"}}
+	telemetry := loop.Telemetry{TokensIn: &input, TokensOut: &output, CacheReadTokens: &cacheRead, CacheWriteTokens: &cacheWrite, Complete: &complete, UsageByAgent: &usage}
+	applyConfiguredPricing(&telemetry, Pricing{PromptUSDPerMillion: 0.5, CompletionUSDPerMillion: 2.5, CacheReadUSDPerMillion: 0.2, CacheWriteUSDPerMillion: 0.5, Snapshot: "cursor-2026-09-12"})
+	if telemetry.EstimatedUSD == nil || *telemetry.EstimatedUSD < 0.0008749 || *telemetry.EstimatedUSD > 0.0008751 {
+		t.Fatalf("cost=%v", telemetry.EstimatedUSD)
+	}
+	if telemetry.Complete == nil || !*telemetry.Complete || telemetry.CostKind != "estimated" || telemetry.PriceSnapshot != "cursor-2026-09-12" || usage[0].EstimatedUSD == nil {
+		t.Fatalf("telemetry=%+v usage=%+v", telemetry, usage)
 	}
 }
 
@@ -98,6 +113,29 @@ environment_image_digest: example/image@sha256:ccccccccccccccccccccccccccccccccc
 relay_image_digest: example/relay@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 protocol_id: controlled-v3
 evaluator_commands: ["test -f /evaluator/hidden.txt"]
+budget:
+  max_usd: 2.0
+execution:
+  harness: pi
+  harness_version: 1.0.0
+  provider: openrouter
+  model: openrouter/example/model
+  reasoning: high
+  command: hbench-pi-openrouter
+  environment: {}
+relay:
+  upstream: https://openrouter.ai
+  base_url_env: HB_MODEL_BASE_URL
+  secret_env: OPENROUTER_API_KEY
+  auth_header: Authorization
+  auth_scheme: Bearer
+  dummy_key_env: HB_MODEL_API_KEY
+  allowed_model: openrouter/example/model
+  max_request_usd: 2.0
+  max_request_bytes: 1048576
+  max_output_tokens: 4096
+  max_prompt_usd_per_million: 1
+  max_completion_usd_per_million: 1
 `
 	if err := os.WriteFile(filepath.Join(dir, "pack.yaml"), []byte(packYAML), 0o600); err != nil {
 		t.Fatal(err)
@@ -129,6 +167,88 @@ evaluator_commands: ["test -f /evaluator/hidden.txt"]
 	}
 }
 
+func TestNamedSetupSelectionKeepsEvaluatorDigest(t *testing.T) {
+	dir := t.TempDir()
+	packYAML := `schema: rodeo.evaluator.v1
+scenario_slug: safe-task
+scenario_version: 1
+target_ref: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+environment_image_digest: example/image@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+relay_image_digest: example/relay@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+protocol_id: controlled-v3
+evaluator_commands: ["true"]
+budget:
+  max_usd: 2.0
+setups:
+  muse:
+    execution:
+      harness: pi
+      harness_version: 1.0.0
+      provider: openrouter
+      model: openrouter/meta/muse
+      reasoning: high
+      command: hbench-pi-openrouter
+      environment: {}
+    relay:
+      upstream: https://openrouter.ai
+      base_url_env: HB_MODEL_BASE_URL
+      secret_env: OPENROUTER_API_KEY
+      auth_header: Authorization
+      auth_scheme: Bearer
+      dummy_key_env: HB_MODEL_API_KEY
+      allowed_model: openrouter/meta/muse
+      max_request_usd: 2.0
+      max_request_bytes: 1048576
+      max_output_tokens: 4096
+      max_prompt_usd_per_million: 1
+      max_completion_usd_per_million: 1
+  luna:
+    execution:
+      harness: pi
+      harness_version: 1.0.0
+      provider: openrouter
+      model: openrouter/openai/luna
+      reasoning: high
+      command: hbench-pi-openrouter
+      environment: {}
+    relay:
+      upstream: https://openrouter.ai
+      base_url_env: HB_MODEL_BASE_URL
+      secret_env: OPENROUTER_API_KEY
+      auth_header: Authorization
+      auth_scheme: Bearer
+      dummy_key_env: HB_MODEL_API_KEY
+      allowed_model: openrouter/openai/luna
+      max_request_usd: 2.0
+      max_request_bytes: 1048576
+      max_output_tokens: 4096
+      max_prompt_usd_per_million: 1
+      max_completion_usd_per_million: 1
+`
+	if err := os.WriteFile(filepath.Join(dir, "pack.yaml"), []byte(packYAML), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pack, digest, err := LoadPack(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pack.SelectSetup(""); err == nil {
+		t.Fatal("accepted a named-setup pack without --setup")
+	}
+	muse, err := pack.SelectSetup("muse")
+	if err != nil || muse.Execution.Model != "openrouter/meta/muse" {
+		t.Fatalf("muse=%#v err=%v", muse.Execution, err)
+	}
+	luna, err := pack.SelectSetup("luna")
+	if err != nil || luna.Execution.Model != "openrouter/openai/luna" {
+		t.Fatalf("luna=%#v err=%v", luna.Execution, err)
+	}
+	_, selectedDigest, err := LoadPack(dir)
+	if err != nil || selectedDigest != digest {
+		t.Fatalf("digest changed after setup selection: before=%s after=%s err=%v", digest, selectedDigest, err)
+	}
+}
+
 func TestPackRequiresExactlyOnePrivateTarget(t *testing.T) {
 	dir := t.TempDir()
 	packYAML := `schema: rodeo.evaluator.v1
@@ -157,6 +277,16 @@ evaluator_commands: ["true"]
 	}
 }
 
+func TestValidateSetupRejectsControlledCursorStreaming(t *testing.T) {
+	setup := Setup{Execution: Execution{
+		Harness: "pi", HarnessVersion: "0.85.1", Provider: "meta", Model: "meta/muse-spark-1.3-contributor", Reasoning: "high",
+		Command: "hbench-pi-cursor", Environment: map[string]string{"CURSOR_BACKEND_URL": "${RELAY_URL}"},
+	}}
+	if err := validateSetup("cursor", setup, map[string]any{"max_usd": 25.0}); err == nil || !strings.Contains(err.Error(), "unsupported Cursor streaming") {
+		t.Fatalf("cursor setup error=%v", err)
+	}
+}
+
 func TestLoadPackRejectsUnpinnedImagesAndExecutionCredentials(t *testing.T) {
 	cases := map[string]struct {
 		image       string
@@ -178,7 +308,10 @@ protocol_id: controlled-v3
 evaluator_commands: ["true"]
 execution:
   harness: pi
+  harness_version: 1.0.0
+  provider: openrouter
   model: test
+  reasoning: high
   command: pi
   environment:
 ` + unsafe.environment + `relay:
@@ -229,7 +362,7 @@ func TestDockerControlledRunEndToEnd(t *testing.T) {
 	pack := Pack{
 		ScenarioSlug: "synthetic", ScenarioVersion: 1, EnvironmentImageDigest: image, RelayImageDigest: "hbench-model-relay@sha256:" + strings.Repeat("e", 64), ProtocolID: "controlled-v3",
 		EvaluatorCommands: []string{`test "$(cat result.txt)" = fixed`}, Budget: map[string]any{"max_minutes": 2},
-		Execution: Execution{Harness: "manual", HarnessVersion: "test", Model: "synthetic", ModelVersion: "1", Command: "test -s HB_PROMPT.txt && printf 'fixed\\n' > result.txt"},
+		Execution: Execution{Harness: "manual", HarnessVersion: "test", Provider: "synthetic", Model: "synthetic", ModelVersion: "1", Reasoning: "none", Command: "test -s HB_PROMPT.txt && printf 'fixed\\n' > result.txt"},
 		Relay:     Relay{Upstream: "https://api.openai.com/v1", BaseURLEnv: "OPENAI_BASE_URL", SecretEnv: "OPENAI_API_KEY", AuthHeader: "Authorization", AuthScheme: "Bearer", DummyKeyEnv: "OPENAI_API_KEY"},
 	}
 	t.Setenv("OPENAI_API_KEY", "synthetic-not-a-real-key")

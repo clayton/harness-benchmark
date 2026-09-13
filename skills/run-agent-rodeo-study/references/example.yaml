@@ -1,4 +1,4 @@
-schema: hb.study.v1
+schema: hb.study.v2
 id: codex-vs-pi-bundles
 question: Does stock Codex with subagents beat a common Pi plugin setup?
 comparison_mode: ecological
@@ -7,6 +7,7 @@ scenarios:
     digest: 797587c512ec02effeeeeade16feb26d518bb5a8057fea8c583201b2faf85cbf
 arms:
   - id: codex-sol-luna
+    mode: personal
     harness: codex
     harness_version: codex-cli 0.147.0
     provider: openai
@@ -15,6 +16,7 @@ arms:
     workflow: codex-subagents
     subagent_topology: 5x:gpt-5.6-luna:ultra
   - id: pi-common-plugins
+    mode: personal
     harness: pi
     harness_version: 0.84.2
     provider: xai
