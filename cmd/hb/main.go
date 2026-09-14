@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	version           = "0.7.1"
+	version           = "0.7.2"
 	defaultRelayImage = "docker.io/claytonlz/agent-rodeo-model-relay@sha256:bcb8fa0938bc93d1c029d21978b7e8339ed24adf179109d5a79f48a5a6958dfa"
 )
 
@@ -434,7 +434,7 @@ Commands:
   hbench trust -s <scenario>
   hbench sandbox-command -s <scenario> --harness <name> --image <name@sha256:digest>
   hbench controlled keygen|validate|run [--runtime auto|docker|podman|nerdctl]
-  hbench study validate|plan|run|status|report|publish STUDY.yaml
+  hbench study validate|plan|run|status|report|promote|publish STUDY.yaml
   hbench callout create STUDY.yaml --statement "..."
   hbench callout challenge <url>
   hbench skill install [--target DIR]

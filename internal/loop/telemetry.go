@@ -3,8 +3,13 @@ package loop
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"sort"
+
+	"github.com/clayton/harness-benchmark/internal/paths"
 )
 
 // ExtractTelemetry parses usage emitted by supported headless harnesses.
@@ -36,6 +41,164 @@ func withTokenCompleteness(t Telemetry) Telemetry {
 	complete := t.TokensIn != nil && t.TokensOut != nil && t.TotalTokens != nil
 	t.TokenComplete = &complete
 	return t
+}
+
+type piSubagentMetadata struct {
+	RunID string `json:"runId"`
+	Agent string `json:"agent"`
+	Model string `json:"model"`
+	Usage *struct {
+		Input      int      `json:"input"`
+		Output     int      `json:"output"`
+		CacheRead  int      `json:"cacheRead"`
+		CacheWrite int      `json:"cacheWrite"`
+		Cost       *float64 `json:"cost"`
+		Turns      int      `json:"turns"`
+	} `json:"usage"`
+}
+
+// MergePiSubagentTelemetry adds usage from pi-subagents' durable metadata.
+// The parent JSONL log does not necessarily contain async child results, so
+// metadata is the authoritative local source for child usage aggregation.
+func MergePiSubagentTelemetry(t Telemetry, artifactsDir string) (Telemetry, bool, error) {
+	matches, err := filepath.Glob(filepath.Join(artifactsDir, "*_meta.json"))
+	if err != nil {
+		return t, false, err
+	}
+	if len(matches) == 0 {
+		return t, false, nil
+	}
+	children := make([]piSubagentMetadata, 0, len(matches))
+	seen := map[string]bool{}
+	for _, path := range matches {
+		raw, readErr := readPiSubagentMetadata(path)
+		if readErr != nil {
+			return t, false, fmt.Errorf("read pi subagent telemetry: %w", readErr)
+		}
+		var child piSubagentMetadata
+		if json.Unmarshal(raw, &child) != nil || child.RunID == "" || child.Model == "" || child.Usage == nil || seen[child.RunID] {
+			continue
+		}
+		seen[child.RunID] = true
+		children = append(children, child)
+	}
+	if len(children) == 0 {
+		return t, false, nil
+	}
+	sort.Slice(children, func(i, j int) bool { return children[i].RunID < children[j].RunID })
+
+	parent := AgentUsage{AgentID: "parent", TokensIn: valueOrZero(t.TokensIn), TokensOut: valueOrZero(t.TokensOut), ReasoningTokens: valueOrZero(t.ReasoningTokens), CacheReadTokens: valueOrZero(t.CacheReadTokens), EstimatedUSD: t.EstimatedUSD}
+	existingChildren := map[string]bool{}
+	if t.UsageByAgent != nil {
+		for _, usage := range *t.UsageByAgent {
+			if usage.AgentID == "parent" {
+				parent = usage
+			} else {
+				existingChildren[usage.AgentID] = true
+			}
+		}
+	}
+	parentCacheWrite := valueOrZero(t.CacheWriteTokens)
+	parentTurns := valueOrZero(t.Turns)
+	for _, child := range children {
+		if existingChildren[child.RunID] {
+			parentCacheWrite -= child.Usage.CacheWrite
+			parentTurns -= child.Usage.Turns
+		}
+	}
+	if parentCacheWrite < 0 {
+		parentCacheWrite = 0
+	}
+	if parentTurns < 0 {
+		parentTurns = 0
+	}
+	parent.TotalTokens = parent.TokensIn + parent.TokensOut + parent.CacheReadTokens + parentCacheWrite
+	usageByAgent := []AgentUsage{parent}
+	input, output, cacheRead, cacheWrite := parent.TokensIn, parent.TokensOut, parent.CacheReadTokens, parentCacheWrite
+	turns := parentTurns
+	cost, costComplete := 0.0, parent.EstimatedUSD != nil
+	if costComplete {
+		cost = *parent.EstimatedUSD
+	}
+	for _, child := range children {
+		total := child.Usage.Input + child.Usage.Output + child.Usage.CacheRead + child.Usage.CacheWrite
+		usageByAgent = append(usageByAgent, AgentUsage{AgentID: child.RunID, Model: child.Model, TokensIn: child.Usage.Input, TokensOut: child.Usage.Output, CacheReadTokens: child.Usage.CacheRead, TotalTokens: total, EstimatedUSD: child.Usage.Cost})
+		input += child.Usage.Input
+		output += child.Usage.Output
+		cacheRead += child.Usage.CacheRead
+		cacheWrite += child.Usage.CacheWrite
+		turns += child.Usage.Turns
+		if child.Usage.Cost == nil {
+			costComplete = false
+		} else {
+			cost += *child.Usage.Cost
+		}
+	}
+	t.TokensIn = intPointer(input)
+	t.TokensOut = intPointer(output)
+	t.CacheReadTokens = intPointer(cacheRead)
+	t.CacheWriteTokens = intPointer(cacheWrite)
+	t.TotalTokens = intPointer(input + output + cacheRead + cacheWrite)
+	t.Turns = intPointer(turns)
+	t.UsageByAgent = agentUsagePointer(usageByAgent)
+	tokenComplete := true
+	t.TokenComplete = &tokenComplete
+	// Child metadata reports catalog estimates but does not include the frozen
+	// rate records needed to claim complete comparable cost telemetry.
+	complete := false
+	t.Complete = &complete
+	if costComplete {
+		t.EstimatedUSD = floatPointer(cost)
+		t.CostKind = "estimated"
+	} else {
+		t.EstimatedUSD = nil
+		t.CostKind = ""
+	}
+	return t, true, nil
+}
+
+func readPiSubagentMetadata(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		return nil, fmt.Errorf("metadata is not a bounded regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, statErr := file.Stat()
+	current, pathErr := os.Lstat(path)
+	if statErr != nil || pathErr != nil || !opened.Mode().IsRegular() || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
+		return nil, fmt.Errorf("metadata changed while opening")
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, 1<<20+1))
+	if err != nil || len(raw) > 1<<20 {
+		return nil, fmt.Errorf("metadata is unreadable or too large")
+	}
+	return raw, nil
+}
+
+// RecoverPiSubagentTelemetry backfills a stored run and is idempotent. Study
+// publication uses it so completed runs can gain preserved child telemetry
+// without rerunning paid cells.
+func RecoverPiSubagentTelemetry(l paths.Layout, id string) (bool, error) {
+	rec, err := Load(l, id)
+	if err != nil {
+		return false, err
+	}
+	if rec.Harness != "pi" {
+		return false, nil
+	}
+	merged, changed, err := MergePiSubagentTelemetry(rec.Telemetry, filepath.Join(l.RunDir(id), "harness-home", "pi", "sessions", "subagent-artifacts"))
+	if err != nil || !changed {
+		return changed, err
+	}
+	rec.Telemetry = merged
+	return true, Save(l, rec)
 }
 
 func cursorTelemetry(raw []byte) Telemetry {

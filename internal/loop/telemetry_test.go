@@ -133,6 +133,55 @@ func TestExtractPiTelemetryAggregatesSubagentResults(t *testing.T) {
 	}
 }
 
+func TestMergePiSubagentTelemetryUsesDurableMetadataAndIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	cost := 0.5
+	turns, input, output, cacheRead, cacheWrite := 2, 10, 3, 20, 1
+	parentUsage := []AgentUsage{{AgentID: "parent", TokensIn: input, TokensOut: output, CacheReadTokens: cacheRead, EstimatedUSD: &cost}}
+	complete := false
+	telemetry := Telemetry{TokensIn: &input, TokensOut: &output, CacheReadTokens: &cacheRead, CacheWriteTokens: &cacheWrite, Turns: &turns, EstimatedUSD: &cost, UsageByAgent: &parentUsage, Complete: &complete}
+	childCost := 0.25
+	meta := `{"runId":"child-2","agent":"worker","model":"meta/muse:high","usage":{"input":7,"output":5,"cacheRead":30,"cacheWrite":2,"cost":0.25,"turns":4}}`
+	if err := os.WriteFile(filepath.Join(dir, "child_meta.json"), []byte(meta), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, changed, err := MergePiSubagentTelemetry(telemetry, dir)
+	if err != nil || !changed {
+		t.Fatalf("changed=%v err=%v", changed, err)
+	}
+	assertIntPointer(t, "tokens in", got.TokensIn, 17)
+	assertIntPointer(t, "tokens out", got.TokensOut, 8)
+	assertIntPointer(t, "cache read", got.CacheReadTokens, 50)
+	assertIntPointer(t, "cache write", got.CacheWriteTokens, 3)
+	assertIntPointer(t, "turns", got.Turns, 6)
+	assertIntPointer(t, "total", got.TotalTokens, 78)
+	assertFloatPointer(t, "cost", got.EstimatedUSD, cost+childCost)
+	if got.TokenComplete == nil || !*got.TokenComplete || got.Complete == nil || *got.Complete || len(*got.UsageByAgent) != 2 {
+		t.Fatalf("merged telemetry=%+v", got)
+	}
+	again, changed, err := MergePiSubagentTelemetry(got, dir)
+	if err != nil || !changed {
+		t.Fatalf("second merge changed=%v err=%v", changed, err)
+	}
+	assertIntPointer(t, "idempotent turns", again.Turns, 6)
+	assertIntPointer(t, "idempotent total", again.TotalTokens, 78)
+	assertFloatPointer(t, "idempotent cost", again.EstimatedUSD, cost+childCost)
+}
+
+func TestMergePiSubagentTelemetryRejectsSymlinkMetadata(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "meta.json")
+	if err := os.WriteFile(target, []byte(`{"runId":"child","model":"model","usage":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "child_meta.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := MergePiSubagentTelemetry(Telemetry{}, dir); err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("symlink error=%v", err)
+	}
+}
+
 func TestExtractCursor202608ResultTelemetry(t *testing.T) {
 	path := writeTelemetryFixture(t, `{"type":"result","usage":{"inputTokens":12,"outputTokens":3,"cacheReadTokens":7,"cacheWriteTokens":2}}`)
 	got := ExtractTelemetry("cursor", path)

@@ -1,0 +1,44 @@
+schema: hb.study.v1
+id: sol-muse-hard-zip-private-v2-2026-09-13
+question: Does SOL 5.6 supervising iterative Muse Spark 1.3 Contributor subagents complete a hard source-port task more accurately and reliably than Muse Spark 1.3 Contributor working alone?
+visibility: private
+comparison_mode: ecological
+scenarios:
+    - id: harness-benchmark/scenarios/zip-password-finder-python-port.yaml
+      digest: b7746b4a8878e48bdbe54f183e731d343e08f1e37867acb1ea02d993eabc1bca
+arms:
+    - id: muse13-direct-zip-v1
+      mode: personal
+      harness: pi
+      harness_version: 0.85.1
+      provider: meta
+      model: muse-spark-1.3-contributor
+      reasoning: high
+      workflow: baseline
+    - id: sol56-muse13-orchestrated-zip-v1
+      mode: personal
+      local_skill_dirs:
+        - /Users/clayton/Projects/AgentRodeoProject/harness-benchmark/experiments/2026-09-13-sol-muse-orchestration/skills/sol-muse-orchestrator
+      local_skill_digests:
+        - fc65aaa43afbd0ce7a8595b5a985dd0115243f0843faa8d7ef2fa7761488780d
+      harness: pi
+      harness_version: 0.85.1
+      provider: openai-codex
+      model: gpt-5.6-sol
+      reasoning: high
+      workflow: sol-supervised-muse-loop-v1
+      plugins:
+        - pi-subagents@0.67.0
+varied_axes:
+    - provider
+    - model
+    - workflow
+    - skills
+    - plugins
+repeats: 3
+seed: 91357
+judge_protocol: scenario-default
+win_rule: callout-title-v1
+budget:
+    max_usd_total: 20
+    max_minutes_per_run: 45

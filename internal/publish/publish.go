@@ -49,11 +49,37 @@ func PublisherKeyFile(origin string) string {
 	return filepath.Join(home, ".config", "hb", "publishers", digest+".pem")
 }
 
+type StudyProjection struct {
+	SourceStudyID        string
+	SourceContractDigest string
+	SourceScenarioID     string
+	SourceScenarioDigest string
+	TargetStudyID        string
+	TargetContractDigest string
+	TargetScenarioID     string
+	TargetScenarioDigest string
+	ArmID                string
+	Repeat               int
+	Task                 map[string]any
+}
+
 func SignedPayload(l paths.Layout, id string) (map[string]any, error) {
 	payload, err := BuildPayload(l, id)
 	if err != nil {
 		return nil, err
 	}
+	return signPayload(payload)
+}
+
+func SignedProjectedPayload(l paths.Layout, id string, projection StudyProjection) (map[string]any, error) {
+	payload, err := BuildProjectedPayload(l, id, projection)
+	if err != nil {
+		return nil, err
+	}
+	return signPayload(payload)
+}
+
+func signPayload(payload map[string]any) (map[string]any, error) {
 	origin, err := ValidatedRodeoURL()
 	if err != nil {
 		return nil, err
@@ -165,15 +191,27 @@ func publisherKey(origin string) (ed25519.PrivateKey, []byte, error) {
 }
 
 func Publish(l paths.Layout, id string, client *http.Client) (map[string]any, error) {
+	payload, err := SignedPayload(l, id)
+	if err != nil {
+		return nil, err
+	}
+	return publishPayload(payload, client)
+}
+
+func PublishProjected(l paths.Layout, id string, projection StudyProjection, client *http.Client) (map[string]any, error) {
+	payload, err := SignedProjectedPayload(l, id, projection)
+	if err != nil {
+		return nil, err
+	}
+	return publishPayload(payload, client)
+}
+
+func publishPayload(payload map[string]any, client *http.Client) (map[string]any, error) {
 	origin, err := ValidatedRodeoURL()
 	if err != nil {
 		return nil, err
 	}
 	client = noRedirectClient(client)
-	payload, err := SignedPayload(l, id)
-	if err != nil {
-		return nil, err
-	}
 	rider, err := ensureRider(client, origin)
 	if err != nil {
 		return nil, err
@@ -362,6 +400,74 @@ func BuildPayload(l paths.Layout, id string) (map[string]any, error) {
 		}
 	}
 	return map[string]any{"schema": "hb.publish.v1", "run": run, "snapshot": snapshot}, nil
+}
+
+// BuildProjectedPayload promotes evidence from a path-bearing private study to
+// an equivalent path-free public contract. It verifies the original frozen
+// cell before replacing only the study/scenario binding and embedded task.
+func BuildProjectedPayload(l paths.Layout, id string, projection StudyProjection) (map[string]any, error) {
+	payload, err := BuildPayload(l, id)
+	if err != nil {
+		return nil, err
+	}
+	run := payload["run"].(map[string]any)
+	snapshot := payload["snapshot"].(map[string]any)
+	binding, ok := snapshot["study"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("run %s has no frozen study binding", id)
+	}
+	if stringValue(binding["id"]) != projection.SourceStudyID ||
+		stringValue(binding["contract_digest"]) != projection.SourceContractDigest ||
+		stringValue(binding["arm_id"]) != projection.ArmID ||
+		stringValue(binding["scenario_id"]) != projection.SourceScenarioID ||
+		stringValue(binding["scenario_digest"]) != projection.SourceScenarioDigest ||
+		intValue(binding["repeat"]) != projection.Repeat {
+		return nil, fmt.Errorf("run %s does not match the source frozen study cell", id)
+	}
+	if err := studycontract.ValidatePublicTask(projection.Task); err != nil {
+		return nil, fmt.Errorf("projected public task is unsafe: %w", err)
+	}
+	digest, err := studycontract.TaskDigest(projection.Task)
+	if err != nil || digest != projection.TargetScenarioDigest {
+		return nil, fmt.Errorf("projected public task digest does not match target scenario")
+	}
+	prompt, _ := projection.Task["prompt"].(string)
+	promptDigest := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.TrimSpace(prompt))))[:16]
+	if declared := stringValue(snapshot["prompt_sha256_16"]); declared != "" && declared != promptDigest {
+		return nil, fmt.Errorf("run %s prompt does not match the projected public task", id)
+	}
+	run["scenario_id"] = projection.TargetScenarioID
+	snapshot["task"] = projection.Task
+	snapshot["study"] = map[string]any{
+		"id": projection.TargetStudyID, "contract_digest": projection.TargetContractDigest,
+		"arm_id": projection.ArmID, "scenario_id": projection.TargetScenarioID,
+		"repeat": projection.Repeat, "scenario_digest": projection.TargetScenarioDigest,
+	}
+	snapshot["promotion"] = map[string]any{
+		"schema": "hb.study.promotion.v1", "source_study_id": projection.SourceStudyID,
+		"source_contract_digest": projection.SourceContractDigest,
+		"source_scenario_id":     projection.SourceScenarioID,
+		"source_scenario_digest": projection.SourceScenarioDigest,
+	}
+	return payload, nil
+}
+
+func stringValue(value any) string {
+	text, _ := value.(string)
+	return text
+}
+
+func intValue(value any) int {
+	switch number := value.(type) {
+	case int:
+		return number
+	case int64:
+		return int(number)
+	case float64:
+		return int(number)
+	default:
+		return 0
+	}
 }
 
 // publicFrozenSkills strips run-local paths before a payload leaves the

@@ -69,9 +69,14 @@ OCI relay hard cap.
 Use `--visibility public` to create an `hb.study.v2` contract. Public Studies
 may use personal profiles, local skill content hashes, external adapters, and a
 local scenario with a public immutable repository. hbench embeds that scenario
-as `hb.task.v1`, strips machine paths and secrets from the contract, and keeps
-local skill path mappings in a private `hb-out/studies/*.inputs.json` sidecar.
-Use `--visibility private` when the Study itself must not be uploaded.
+as `hb.task.v1`, including bounded evaluator files and lockfile-pinned fetch
+declarations, strips machine paths and secrets from the contract, and keeps
+creator-side scenario and skill path mappings in a private
+`hb-out/studies/*.inputs.json` sidecar. Use `--visibility private` when the
+Study itself must not be uploaded. To recover an already completed private
+workaround without paid reruns, use
+`hbench study promote PRIVATE.yaml --out PUBLIC.yaml` before creating the
+Callout.
 
 ## Publish a finding
 

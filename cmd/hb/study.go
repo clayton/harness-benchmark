@@ -1,7 +1,10 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -40,11 +43,22 @@ type studyCell struct {
 	RunID    string `json:"run_id"`
 }
 
+type studyPromotion struct {
+	Schema             string            `json:"schema"`
+	SourceManifestPath string            `json:"source_manifest_path"`
+	SourceStudyID      string            `json:"source_study_id"`
+	SourceDigest       string            `json:"source_digest"`
+	TargetStudyID      string            `json:"target_study_id"`
+	TargetDigest       string            `json:"target_digest"`
+	Scenarios          map[string]string `json:"source_scenarios_by_target"`
+}
+
 type studyLocalInputs struct {
-	Schema      string              `json:"schema"`
-	StudyID     string              `json:"study_id"`
-	Digest      string              `json:"digest"`
-	LocalSkills map[string][]string `json:"local_skill_dirs"`
+	Schema         string              `json:"schema"`
+	StudyID        string              `json:"study_id"`
+	Digest         string              `json:"digest"`
+	LocalSkills    map[string][]string `json:"local_skill_dirs,omitempty"`
+	LocalScenarios map[string]string   `json:"local_scenario_paths,omitempty"`
 }
 
 type stringList []string
@@ -130,6 +144,7 @@ func initStudy(args []string) error {
 	}
 
 	scenarios := make([]studycontract.Scenario, 0, len(scenarioRefs))
+	localScenarioPaths := map[string]string{}
 	for _, ref := range scenarioRefs {
 		scenario, err := resolveStudyInitScenario(ref)
 		if err != nil {
@@ -154,6 +169,11 @@ func initStudy(args []string) error {
 				return fmt.Errorf("public task %s: %w", scenario.ID, err)
 			}
 			id = "local:" + digest[:16]
+			localRef := ref
+			if absolute, absErr := filepath.Abs(ref); absErr == nil {
+				localRef = absolute
+			}
+			localScenarioPaths[id] = localRef
 		default:
 			// Private contracts retain the local path needed to execute local
 			// files. Public contracts embed a path-free hb.task.v1 object above.
@@ -219,7 +239,7 @@ func initStudy(args []string) error {
 		return err
 	}
 	if *visibility == "public" {
-		if err := saveStudyLocalInputs(manifest); err != nil {
+		if err := saveStudyLocalInputs(manifest, localScenarioPaths); err != nil {
 			return err
 		}
 		manifest = publicStudyManifest(manifest)
@@ -253,7 +273,29 @@ func publicScenarioTask(s corpus.Scenario) (map[string]any, error) {
 		"acceptance": map[string]any{
 			"setup_commands": stringList(s.Acceptance.SetupCommands), "test_commands": stringList(s.Acceptance.TestCommands),
 			"build_commands": stringList(s.Acceptance.BuildCommands), "fail_to_pass": stringList(s.Acceptance.FailToPass),
+			"gold_files": stringList(s.Acceptance.GoldFiles),
 		},
+	}
+	if len(s.Requirements.Commands) > 0 {
+		value["requirements"] = s.Requirements
+	}
+	if len(s.Fetches) > 0 {
+		value["fetches"] = s.Fetches
+	}
+	if len(s.Acceptance.GoldFiles) > 0 {
+		artifacts := make([]map[string]any, 0, len(s.Acceptance.GoldFiles))
+		for _, relative := range s.Acceptance.GoldFiles {
+			raw, err := os.ReadFile(filepath.Join(s.SourceDir, filepath.Clean(relative)))
+			if err != nil {
+				return nil, fmt.Errorf("read evaluator artifact %s: %w", relative, err)
+			}
+			if len(raw) > 64*1024 {
+				return nil, fmt.Errorf("evaluator artifact %s exceeds 64 KiB", relative)
+			}
+			sum := sha256.Sum256(raw)
+			artifacts = append(artifacts, map[string]any{"path": relative, "sha256": hex.EncodeToString(sum[:]), "content_base64": base64.StdEncoding.EncodeToString(raw)})
+		}
+		value["artifacts"] = artifacts
 	}
 	// Normalize concrete slices and structs to the same JSON value types read
 	// from a published contract before applying the shared validator.
@@ -465,14 +507,14 @@ func latestPublishedScenario(slug string) (string, error) {
 
 func cmdStudy(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: hbench study init|validate|plan|run|status|report|publish STUDY.yaml")
+		return fmt.Errorf("usage: hbench study init|validate|plan|run|status|report|promote|publish STUDY.yaml")
 	}
 	action := args[0]
 	if action == "init" {
 		return initStudy(args[1:])
 	}
 	if len(args) < 2 {
-		return fmt.Errorf("usage: hbench study init|validate|plan|run|status|report|publish STUDY.yaml")
+		return fmt.Errorf("usage: hbench study init|validate|plan|run|status|report|promote|publish STUDY.yaml")
 	}
 	path := args[1]
 	actionArgs := args[2:]
@@ -483,7 +525,7 @@ func cmdStudy(args []string) error {
 		actionArgs = append([]string{"--preview"}, args[3:]...)
 	}
 	if path == "--help" || path == "-h" {
-		fmt.Println("usage: hbench study init|validate|plan|run|status|report|publish STUDY.yaml")
+		fmt.Println("usage: hbench study init|validate|plan|run|status|report|promote|publish STUDY.yaml")
 		return nil
 	}
 	m, err := studycontract.Load(path)
@@ -510,6 +552,8 @@ func cmdStudy(args []string) error {
 		return printStudyStatus(m)
 	case "report":
 		return writeStudyReport(path, m)
+	case "promote":
+		return promoteStudy(path, m, actionArgs)
 	case "export":
 		return exportStudy(m, actionArgs)
 	case "run":
@@ -648,14 +692,224 @@ func studyLocalInputsPath(m studycontract.Manifest) string {
 	return filepath.Join(layout().OutDir, "studies", safeStudyID(m.ID)+".inputs.json")
 }
 
-func saveStudyLocalInputs(m studycontract.Manifest) error {
-	inputs := studyLocalInputs{Schema: "hb.study.inputs.v1", StudyID: m.ID, Digest: m.Digest(), LocalSkills: map[string][]string{}}
+func studyPromotionPath(m studycontract.Manifest) string {
+	return filepath.Join(layout().OutDir, "studies", safeStudyID(m.ID)+".promotion.json")
+}
+
+func readSecureStudySidecar(path, label string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		return nil, fmt.Errorf("%s must be a mode-0600 regular file", label)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	opened, statErr := file.Stat()
+	current, pathErr := os.Lstat(path)
+	if statErr != nil || pathErr != nil || !opened.Mode().IsRegular() || !current.Mode().IsRegular() || !os.SameFile(opened, current) {
+		return nil, fmt.Errorf("%s changed while opening", label)
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, 1<<20+1))
+	if err != nil || len(raw) > 1<<20 {
+		return nil, fmt.Errorf("%s is unreadable or too large", label)
+	}
+	return raw, nil
+}
+
+func promoteStudy(sourcePath string, source studycontract.Manifest, args []string) error {
+	fs := flag.NewFlagSet("study promote", flag.ContinueOnError)
+	outPath := fs.String("out", "", "path for the public study manifest")
+	targetID := fs.String("id", source.ID+"-public", "public study ID")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !source.IsPrivate() {
+		return fmt.Errorf("study promote requires a private source study")
+	}
+	if *outPath == "" {
+		return fmt.Errorf("--out is required")
+	}
+	if _, err := os.Stat(*outPath); err == nil {
+		return fmt.Errorf("refusing to overwrite %s", *outPath)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	sourceState, err := loadStudyState(source)
+	if err != nil {
+		return err
+	}
+	if len(sourceState.Completed) != source.RunCount() || sourceState.Pending != nil {
+		return fmt.Errorf("source study is incomplete; run hbench study status")
+	}
+	if err := validateStudyStateCells(source, sourceState); err != nil {
+		return err
+	}
+
+	target := source
+	target.Schema = studycontract.SchemaV2
+	target.ID = *targetID
+	target.Visibility = ""
+	target.Private = false
+	target.Arms = append([]studycontract.Arm(nil), source.Arms...)
+	for i := range target.Arms {
+		target.Arms[i].LocalSkills = nil
+	}
+	target.Scenarios = nil
+	localScenarios := map[string]string{}
+	targetBySource := map[string]string{}
+	for _, frozen := range source.Scenarios {
+		if strings.HasPrefix(frozen.ID, "rodeo:") && len(frozen.Task) == 0 {
+			target.Scenarios = append(target.Scenarios, frozen)
+			targetBySource[frozen.ID] = frozen.ID
+			continue
+		}
+		local, resolveErr := resolveFrozenStudyScenario(layout(), frozen)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve source scenario %s: %w", frozen.ID, resolveErr)
+		}
+		task, taskErr := publicScenarioTask(local)
+		if taskErr != nil {
+			return taskErr
+		}
+		digest, digestErr := studycontract.TaskDigest(task)
+		if digestErr != nil {
+			return digestErr
+		}
+		id := "local:" + digest[:16]
+		target.Scenarios = append(target.Scenarios, studycontract.Scenario{ID: id, Digest: digest, Task: task})
+		targetBySource[frozen.ID] = id
+		localRef := frozen.ID
+		if absolute, absErr := filepath.Abs(localRef); absErr == nil {
+			localRef = absolute
+		}
+		localScenarios[id] = localRef
+	}
+	if err := target.Validate(); err != nil {
+		return err
+	}
+
+	targetState := studyState{Schema: "hb.study.state.v1", StudyID: target.ID, Digest: target.Digest(), Completed: make([]studyCell, 0, len(sourceState.Completed))}
+	for _, cell := range sourceState.Completed {
+		targetScenario := targetBySource[cell.Scenario]
+		if targetScenario == "" {
+			return fmt.Errorf("source state scenario %s is not in the source contract", cell.Scenario)
+		}
+		cell.Scenario = targetScenario
+		targetState.Completed = append(targetState.Completed, cell)
+	}
+	absoluteSource, err := filepath.Abs(sourcePath)
+	if err != nil {
+		return err
+	}
+	promotion := studyPromotion{Schema: "hb.study.promotion.v1", SourceManifestPath: absoluteSource, SourceStudyID: source.ID, SourceDigest: source.Digest(), TargetStudyID: target.ID, TargetDigest: target.Digest(), Scenarios: map[string]string{}}
+	for sourceID, targetScenario := range targetBySource {
+		promotion.Scenarios[targetScenario] = sourceID
+	}
+
+	raw, err := yaml.Marshal(target)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(*outPath, raw, 0o644); err != nil {
+		return err
+	}
+	targetWithPaths := target
+	targetWithPaths.Arms = append([]studycontract.Arm(nil), source.Arms...)
+	if err := saveStudyLocalInputs(targetWithPaths, localScenarios); err != nil {
+		return err
+	}
+	if err := saveStudyState(target, targetState); err != nil {
+		return err
+	}
+	promotionRaw, _ := json.MarshalIndent(promotion, "", "  ")
+	if err := loop.WriteFileAtomic(studyPromotionPath(target), append(promotionRaw, '\n'), 0o600); err != nil {
+		return err
+	}
+	fmt.Printf("Promoted completed study without rerunning cells.\nPublic contract: %s\ncontract: %s\nNext: hbench callout create %s --statement TEXT\n", *outPath, target.Digest(), *outPath)
+	return nil
+}
+
+func loadStudyPromotion(target studycontract.Manifest) (*studyPromotion, studycontract.Manifest, studyState, error) {
+	path := studyPromotionPath(target)
+	if _, err := os.Lstat(path); os.IsNotExist(err) {
+		return nil, studycontract.Manifest{}, studyState{}, nil
+	} else if err != nil {
+		return nil, studycontract.Manifest{}, studyState{}, err
+	}
+	raw, err := readSecureStudySidecar(path, "study promotion sidecar")
+	if err != nil {
+		return nil, studycontract.Manifest{}, studyState{}, err
+	}
+	var promotion studyPromotion
+	if json.Unmarshal(raw, &promotion) != nil || promotion.Schema != "hb.study.promotion.v1" || promotion.TargetStudyID != target.ID || promotion.TargetDigest != target.Digest() {
+		return nil, studycontract.Manifest{}, studyState{}, fmt.Errorf("study promotion sidecar does not match the public contract")
+	}
+	source, err := studycontract.Load(promotion.SourceManifestPath)
+	if err != nil {
+		return nil, studycontract.Manifest{}, studyState{}, err
+	}
+	if source.ID != promotion.SourceStudyID || source.Digest() != promotion.SourceDigest || !source.IsPrivate() {
+		return nil, studycontract.Manifest{}, studyState{}, fmt.Errorf("study promotion source does not match the recorded private contract")
+	}
+	sourceState, err := loadStudyState(source)
+	if err != nil {
+		return nil, studycontract.Manifest{}, studyState{}, err
+	}
+	if err := validateStudyStateCells(source, sourceState); err != nil {
+		return nil, studycontract.Manifest{}, studyState{}, err
+	}
+	for targetScenarioID, sourceScenarioID := range promotion.Scenarios {
+		var sourceScenario, targetScenario *studycontract.Scenario
+		for i := range source.Scenarios {
+			if source.Scenarios[i].ID == sourceScenarioID {
+				sourceScenario = &source.Scenarios[i]
+			}
+		}
+		for i := range target.Scenarios {
+			if target.Scenarios[i].ID == targetScenarioID {
+				targetScenario = &target.Scenarios[i]
+			}
+		}
+		if sourceScenario == nil || targetScenario == nil || len(targetScenario.Task) == 0 {
+			return nil, studycontract.Manifest{}, studyState{}, fmt.Errorf("study promotion scenario mapping is incomplete")
+		}
+		resolved, resolveErr := resolveFrozenStudyScenario(layout(), *sourceScenario)
+		if resolveErr != nil {
+			return nil, studycontract.Manifest{}, studyState{}, resolveErr
+		}
+		if verifyErr := verifyStudyScenario(resolved, *sourceScenario); verifyErr != nil {
+			return nil, studycontract.Manifest{}, studyState{}, verifyErr
+		}
+		derivedTask, taskErr := publicScenarioTask(resolved)
+		if taskErr != nil {
+			return nil, studycontract.Manifest{}, studyState{}, taskErr
+		}
+		derivedDigest, digestErr := studycontract.TaskDigest(derivedTask)
+		if digestErr != nil || derivedDigest != targetScenario.Digest {
+			return nil, studycontract.Manifest{}, studyState{}, fmt.Errorf("public task no longer matches the verified private source scenario")
+		}
+	}
+	return &promotion, source, sourceState, nil
+}
+
+func saveStudyLocalInputs(m studycontract.Manifest, localScenarios ...map[string]string) error {
+	inputs := studyLocalInputs{Schema: "hb.study.inputs.v1", StudyID: m.ID, Digest: m.Digest(), LocalSkills: map[string][]string{}, LocalScenarios: map[string]string{}}
 	for _, arm := range m.Arms {
 		if len(arm.LocalSkills) > 0 {
 			inputs.LocalSkills[arm.ID] = append([]string(nil), arm.LocalSkills...)
 		}
 	}
-	if len(inputs.LocalSkills) == 0 {
+	if len(localScenarios) > 0 {
+		for id, path := range localScenarios[0] {
+			inputs.LocalScenarios[id] = path
+		}
+	}
+	if len(inputs.LocalSkills) == 0 && len(inputs.LocalScenarios) == 0 {
 		return nil
 	}
 	raw, err := json.MarshalIndent(inputs, "", "  ")
@@ -669,16 +923,30 @@ func saveStudyLocalInputs(m studycontract.Manifest) error {
 }
 
 func loadStudyLocalInputs(m studycontract.Manifest) (studycontract.Manifest, error) {
-	needsInputs := false
+	needsSkills := false
+	mayHaveLocalScenarios := false
 	for _, arm := range m.Arms {
-		needsInputs = needsInputs || len(arm.LocalSkillDigests) > 0 && len(arm.LocalSkills) == 0
+		needsSkills = needsSkills || len(arm.LocalSkillDigests) > 0 && len(arm.LocalSkills) == 0
 	}
-	if !needsInputs {
+	for _, scenario := range m.Scenarios {
+		mayHaveLocalScenarios = mayHaveLocalScenarios || strings.HasPrefix(scenario.ID, "local:") && len(scenario.Task) > 0 && scenario.LocalPath == ""
+	}
+	if !needsSkills && !mayHaveLocalScenarios {
 		return m, nil
 	}
-	raw, err := os.ReadFile(studyLocalInputsPath(m))
+	path := studyLocalInputsPath(m)
+	if _, err := os.Lstat(path); err != nil {
+		if needsSkills {
+			return studycontract.Manifest{}, fmt.Errorf("study uses local skill hashes but local path mapping is unavailable: %w", err)
+		}
+		// A downloaded public task can run without the creator's private
+		// evaluator overlay. Creator-side mappings restore frozen fetch and
+		// evaluator inputs without changing public contract identity.
+		return m, nil
+	}
+	raw, err := readSecureStudySidecar(path, "study local-input sidecar")
 	if err != nil {
-		return studycontract.Manifest{}, fmt.Errorf("study uses local skill hashes but local path mapping is unavailable: %w", err)
+		return studycontract.Manifest{}, err
 	}
 	var inputs studyLocalInputs
 	if err := json.Unmarshal(raw, &inputs); err != nil {
@@ -688,8 +956,12 @@ func loadStudyLocalInputs(m studycontract.Manifest) (studycontract.Manifest, err
 		return studycontract.Manifest{}, fmt.Errorf("local study inputs do not match this contract")
 	}
 	m.Arms = append([]studycontract.Arm(nil), m.Arms...)
+	m.Scenarios = append([]studycontract.Scenario(nil), m.Scenarios...)
 	for i := range m.Arms {
 		m.Arms[i].LocalSkills = append([]string(nil), inputs.LocalSkills[m.Arms[i].ID]...)
+	}
+	for i := range m.Scenarios {
+		m.Scenarios[i].LocalPath = inputs.LocalScenarios[m.Scenarios[i].ID]
 	}
 	if err := m.Validate(); err != nil {
 		return studycontract.Manifest{}, err
@@ -1027,17 +1299,44 @@ func resolveFrozenStudyScenario(l paths.Layout, frozen studycontract.Scenario) (
 	if err := studycontract.ValidatePublicTask(frozen.Task); err != nil {
 		return corpus.Scenario{}, err
 	}
+	if frozen.LocalPath != "" {
+		local, err := corpus.Resolve(l.ScenariosDir(), "", frozen.LocalPath)
+		if err != nil {
+			return corpus.Scenario{}, fmt.Errorf("resolve local evaluator mapping: %w", err)
+		}
+		task, err := publicScenarioTask(local)
+		if err != nil {
+			return corpus.Scenario{}, err
+		}
+		digest, err := studycontract.TaskDigest(task)
+		if err != nil {
+			return corpus.Scenario{}, err
+		}
+		if digest != frozen.Digest {
+			return corpus.Scenario{}, fmt.Errorf("local evaluator mapping for %s does not match the frozen public task", frozen.ID)
+		}
+		local.ID = frozen.ID
+		local.ManifestDigest = frozen.Digest
+		return local, nil
+	}
 	var task struct {
-		ID          string            `json:"id"`
-		Type        string            `json:"type"`
-		Title       string            `json:"title"`
-		Description string            `json:"description"`
-		Prompt      string            `json:"prompt"`
-		Language    string            `json:"language"`
-		Tags        []string          `json:"tags"`
-		Difficulty  string            `json:"difficulty"`
-		Repo        corpus.Repo       `json:"repo"`
-		Acceptance  corpus.Acceptance `json:"acceptance"`
+		ID           string              `json:"id"`
+		Type         string              `json:"type"`
+		Title        string              `json:"title"`
+		Description  string              `json:"description"`
+		Prompt       string              `json:"prompt"`
+		Language     string              `json:"language"`
+		Tags         []string            `json:"tags"`
+		Difficulty   string              `json:"difficulty"`
+		Repo         corpus.Repo         `json:"repo"`
+		Acceptance   corpus.Acceptance   `json:"acceptance"`
+		Requirements corpus.Requirements `json:"requirements"`
+		Fetches      []corpus.Fetch      `json:"fetches"`
+		Artifacts    []struct {
+			Path          string `json:"path"`
+			SHA256        string `json:"sha256"`
+			ContentBase64 string `json:"content_base64"`
+		} `json:"artifacts"`
 	}
 	raw, err := json.Marshal(frozen.Task)
 	if err != nil {
@@ -1046,10 +1345,35 @@ func resolveFrozenStudyScenario(l paths.Layout, frozen studycontract.Scenario) (
 	if err := json.Unmarshal(raw, &task); err != nil {
 		return corpus.Scenario{}, err
 	}
+	sourceDir := ""
+	if len(task.Artifacts) > 0 {
+		sourceDir = filepath.Join(l.DataDir, "tasks", frozen.Digest)
+		if err := os.MkdirAll(sourceDir, 0o700); err != nil {
+			return corpus.Scenario{}, err
+		}
+		for _, artifact := range task.Artifacts {
+			content, err := base64.StdEncoding.DecodeString(artifact.ContentBase64)
+			if err != nil {
+				return corpus.Scenario{}, err
+			}
+			sum := sha256.Sum256(content)
+			if hex.EncodeToString(sum[:]) != artifact.SHA256 {
+				return corpus.Scenario{}, fmt.Errorf("evaluator artifact %s digest mismatch", artifact.Path)
+			}
+			target := filepath.Join(sourceDir, filepath.FromSlash(artifact.Path))
+			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+				return corpus.Scenario{}, err
+			}
+			if err := loop.WriteFileAtomic(target, content, 0o600); err != nil {
+				return corpus.Scenario{}, err
+			}
+		}
+	}
 	return corpus.Scenario{
 		ID: frozen.ID, Type: task.Type, Title: task.Title, Description: task.Description,
 		Prompt: task.Prompt, Language: task.Language, Tags: task.Tags, Difficulty: task.Difficulty,
-		Repo: task.Repo, Acceptance: task.Acceptance, ManifestDigest: frozen.Digest, External: true,
+		Repo: task.Repo, Acceptance: task.Acceptance, Requirements: task.Requirements, Fetches: task.Fetches,
+		SourceDir: sourceDir, ManifestDigest: frozen.Digest, External: true,
 	}, nil
 }
 
@@ -1181,14 +1505,38 @@ func publishStudy(path string, m studycontract.Manifest, args []string) error {
 	if err := verifyStudyLocalSkills(m); err != nil {
 		return err
 	}
-	if err := validateStudyStateCells(m, s); err != nil {
+	promotion, sourceManifest, sourceState, err := loadStudyPromotion(m)
+	if err != nil {
+		return err
+	}
+	if promotion == nil {
+		if err := validateStudyStateCells(m, s); err != nil {
+			return err
+		}
+	} else if err := validatePromotedStudyState(m, s, *promotion, sourceManifest, sourceState); err != nil {
 		return err
 	}
 	if len(s.Completed) != m.RunCount() || s.Pending != nil {
 		return fmt.Errorf("study is incomplete; run hbench study status")
 	}
+	for _, cell := range s.Completed {
+		if _, recoverErr := loop.RecoverPiSubagentTelemetry(layout(), cell.RunID); recoverErr != nil {
+			return fmt.Errorf("recover child telemetry for %s: %w", cell.RunID, recoverErr)
+		}
+	}
 	if err := enforceStudyBudget(m, s); err != nil {
 		return err
+	}
+	if promotion != nil {
+		for _, cell := range s.Completed {
+			projection, projectionErr := promotedCellProjection(m, cell, *promotion, sourceManifest)
+			if projectionErr != nil {
+				return projectionErr
+			}
+			if _, projectionErr = publish.BuildProjectedPayload(layout(), cell.RunID, projection); projectionErr != nil {
+				return projectionErr
+			}
+		}
 	}
 	if m.IsPrivate() && !*preview {
 		return fmt.Errorf("private studies cannot be published; use --preview for a local publication check")
@@ -1212,7 +1560,15 @@ func publishStudy(path string, m studycontract.Manifest, args []string) error {
 	}
 	links := make([]map[string]any, 0, len(s.Completed))
 	for _, c := range s.Completed {
-		_, err := publish.Publish(layout(), c.RunID, nil)
+		if promotion == nil {
+			_, err = publish.Publish(layout(), c.RunID, nil)
+		} else {
+			projection, projectionErr := promotedCellProjection(m, c, *promotion, sourceManifest)
+			if projectionErr != nil {
+				return projectionErr
+			}
+			_, err = publish.PublishProjected(layout(), c.RunID, projection, nil)
+		}
 		if err != nil {
 			return err
 		}
@@ -1225,6 +1581,54 @@ func publishStudy(path string, m studycontract.Manifest, args []string) error {
 	}
 	fmt.Printf("Published study: %v\n", out["url"])
 	return nil
+}
+
+func validatePromotedStudyState(target studycontract.Manifest, targetState studyState, promotion studyPromotion, source studycontract.Manifest, sourceState studyState) error {
+	if len(targetState.Completed) != target.RunCount() || targetState.Pending != nil || len(sourceState.Completed) != source.RunCount() || sourceState.Pending != nil {
+		return fmt.Errorf("promoted study is incomplete")
+	}
+	sourceRuns := map[string]string{}
+	for _, cell := range sourceState.Completed {
+		sourceRuns[fmt.Sprintf("%s\x00%s\x00%d", cell.Arm, cell.Scenario, cell.Repeat)] = cell.RunID
+	}
+	for _, cell := range targetState.Completed {
+		sourceScenario := promotion.Scenarios[cell.Scenario]
+		if sourceScenario == "" {
+			return fmt.Errorf("promoted scenario %s has no verified source mapping", cell.Scenario)
+		}
+		key := fmt.Sprintf("%s\x00%s\x00%d", cell.Arm, sourceScenario, cell.Repeat)
+		if sourceRuns[key] != cell.RunID {
+			return fmt.Errorf("promoted cell %s/%s repeat %d does not preserve the source run", cell.Arm, cell.Scenario, cell.Repeat)
+		}
+	}
+	return nil
+}
+
+func promotedCellProjection(target studycontract.Manifest, cell studyCell, promotion studyPromotion, source studycontract.Manifest) (publish.StudyProjection, error) {
+	sourceScenarioID := promotion.Scenarios[cell.Scenario]
+	var sourceScenario, targetScenario *studycontract.Scenario
+	for i := range source.Scenarios {
+		if source.Scenarios[i].ID == sourceScenarioID {
+			sourceScenario = &source.Scenarios[i]
+			break
+		}
+	}
+	for i := range target.Scenarios {
+		if target.Scenarios[i].ID == cell.Scenario {
+			targetScenario = &target.Scenarios[i]
+			break
+		}
+	}
+	if sourceScenario == nil || targetScenario == nil || len(targetScenario.Task) == 0 {
+		return publish.StudyProjection{}, fmt.Errorf("promoted cell %s/%s has an incomplete scenario mapping", cell.Arm, cell.Scenario)
+	}
+	return publish.StudyProjection{
+		SourceStudyID: source.ID, SourceContractDigest: source.Digest(),
+		SourceScenarioID: sourceScenario.ID, SourceScenarioDigest: sourceScenario.Digest,
+		TargetStudyID: target.ID, TargetContractDigest: target.Digest(),
+		TargetScenarioID: targetScenario.ID, TargetScenarioDigest: targetScenario.Digest,
+		ArmID: cell.Arm, Repeat: cell.Repeat, Task: targetScenario.Task,
+	}, nil
 }
 
 func validateStudyStateCells(m studycontract.Manifest, s studyState) error {
@@ -1276,12 +1680,13 @@ func printStudyPublicationPreview(path string, m studycontract.Manifest, s study
 			byArm[cell.Arm] = p
 		}
 		p.Runs++
+		if rec.Telemetry.EstimatedUSD != nil {
+			p.CostUSD += *rec.Telemetry.EstimatedUSD
+		}
 		if rec.Telemetry.EstimatedUSD == nil || rec.Telemetry.Complete == nil || !*rec.Telemetry.Complete ||
 			(rec.Telemetry.CostKind != "actual" && rec.Telemetry.CostKind != "estimated") ||
 			(rec.Telemetry.CostKind == "estimated" && rec.Telemetry.PriceSnapshot == "") {
 			p.CostComplete = false
-		} else {
-			p.CostUSD += *rec.Telemetry.EstimatedUSD
 		}
 		if rec.Telemetry.TokenComplete == nil || !*rec.Telemetry.TokenComplete {
 			p.TokenComplete = false

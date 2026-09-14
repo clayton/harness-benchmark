@@ -1,0 +1,120 @@
+schema: hb.study.v2
+id: sol-muse-hard-zip-public-v2-2026-09-13
+question: Does SOL 5.6 supervising iterative Muse Spark 1.3 Contributor subagents complete a hard source-port task more accurately and reliably than Muse Spark 1.3 Contributor working alone?
+comparison_mode: ecological
+scenarios:
+    - id: local:aa6e252d3189b696
+      digest: aa6e252d3189b6968a6c453493fd69c1f6834ed6c9766877718ce3761c57bb9e
+      task:
+        acceptance:
+            build_commands:
+                - sh compile.sh
+            fail_to_pass:
+                - 18 reference-equivalence assertions
+            gold_files:
+                - hb_zip_password_finder_test.py
+            setup_commands:
+                - cargo build --release --locked --offline
+                - mkdir -p .hbench && cp target/release/zip-password-finder .hbench/zip-password-finder-reference
+                - |-
+                  printf '
+                  .hbench/
+                  ' >> .git/info/exclude
+            test_commands:
+                - python3 hb_zip_password_finder_test.py
+        artifacts:
+            - content_base64: IyEvdXNyL2Jpbi9lbnYgcHl0aG9uMwoiIiJQdWJsaWMgZGlmZmVyZW50aWFsIGp1ZGdlIGZvciB0aGUgWklQIHBhc3N3b3JkIGZpbmRlciBQeXRob24gcG9ydC4iIiIKCmZyb20gX19mdXR1cmVfXyBpbXBvcnQgYW5ub3RhdGlvbnMKCmltcG9ydCBweV9jb21waWxlCmltcG9ydCByZQppbXBvcnQgc3VicHJvY2VzcwppbXBvcnQgc3lzCmZyb20gcGF0aGxpYiBpbXBvcnQgUGF0aAoKClJPT1QgPSBQYXRoLmN3ZCgpClJFRkVSRU5DRSA9IFJPT1QgLyAiLmhiZW5jaCIgLyAiemlwLXBhc3N3b3JkLWZpbmRlci1yZWZlcmVuY2UiCkVYRUNVVEFCTEUgPSBST09UIC8gImV4ZWN1dGFibGUiClRFU1RfRklMRVMgPSBST09UIC8gInRlc3QtZmlsZXMiClRJTUVPVVRfU0VDT05EUyA9IDkwCgpDQVNFUyA9IFsKICAgICgiZmluZCBnZW5lcmF0ZWQiLCBbIi1pIiwgIjIudGVzdC50eHQuemlwIiwgIi1jIiwgImwiLCAiLS1tYXhQYXNzd29yZExlbiIsICIyIiwgIi13IiwgIjEiXSksCiAgICAoImZpbmQgZ2VuZXJhdGVkIGZyb20gc3RhcnRpbmcgcGFzc3dvcmQiLCBbIi1pIiwgIjMudGVzdC50eHQuemlwIiwgIi1jIiwgImwiLCAiLS1tYXhQYXNzd29yZExlbiIsICIzIiwgIi1zIiwgImFiYyIsICItdyIsICIxIl0pLAogICAgKCJub3QgZm91bmQiLCBbIi1pIiwgIjIudGVzdC50eHQuemlwIiwgIi1jIiwgImwiLCAiLS1tYXhQYXNzd29yZExlbiIsICIxIiwgIi13IiwgIjEiXSksCiAgICAoImRpY3Rpb25hcnkiLCBbIi1pIiwgIjIudGVzdC50eHQuemlwIiwgIi1wIiwgImdlbmVyYXRlZC1wYXNzd29yZHMtbG93ZXJjYXNlLnR4dCIsICItdyIsICIxIl0pLAogICAgKCJtYXNrIHR3byBsb3dlcmNhc2UiLCBbIi1pIiwgIjIudGVzdC50eHQuemlwIiwgIi0tbWFzayIsICI/bD9sIiwgIi13IiwgIjEiXSksCiAgICAoIm1hc2sgY3VzdG9tIGNoYXJzZXQiLCBbIi1pIiwgIjIudGVzdC50eHQuemlwIiwgIi0tbWFzayIsICI/MT8xIiwgIi0xIiwgImFiIiwgIi13IiwgIjEiXSksCiAgICAoIm1pc3NpbmcgaW5wdXQiLCBbIi1pIiwgIm1pc3NpbmcuemlwIl0pLAogICAgKCJ3b3JrZXJzIHplcm8iLCBbIi1pIiwgIjIudGVzdC50eHQuemlwIiwgIi13IiwgIjAiXSksCiAgICAoIm1pbmltdW0gbGVuZ3RoIHplcm8iLCBbIi1pIiwgIjIudGVzdC50eHQuemlwIiwgIi0tbWluUGFzc3dvcmRMZW4iLCAiMCJdKSwKICAgICgibWF4aW11bSBiZWZvcmUgbWluaW11bSIsIFsiLWkiLCAiMi50ZXN0LnR4dC56aXAiLCAiLS1taW5QYXNzd29yZExlbiIsICIzIiwgIi0tbWF4UGFzc3dvcmRMZW4iLCAiMiJdKSwKICAgICgiZmlsZSBudW1iZXIgbWlzc2luZyIsIFsiLWkiLCAiMi50ZXN0LnR4dC56aXAiLCAiLS1maWxlTnVtYmVyIiwgIjk5IiwgIi1jIiwgImwiLCAiLS1tYXhQYXNzd29yZExlbiIsICIyIl0pLApdCgpSRVFVSVJFRF9PUFRJT05TID0gewogICAgIi0taW5wdXRGaWxlIiwKICAgICItLXdvcmtlcnMiLAogICAgIi0tcGFzc3dvcmREaWN0aW9uYXJ5IiwKICAgICItLWNoYXJzZXQiLAogICAgIi0tY2hhcnNldEZpbGUiLAogICAgIi0tbWluUGFzc3dvcmRMZW4iLAogICAgIi0tbWF4UGFzc3dvcmRMZW4iLAogICAgIi0tZmlsZU51bWJlciIsCiAgICAiLS1zdGFydGluZ1Bhc3N3b3JkIiwKICAgICItLW1hc2siLAogICAgIi0tY3VzdG9tQ2hhcnNldDEiLAp9CgoKZGVmIHJ1bihhcmd2OiBsaXN0W3N0cl0sIHRpbWVvdXQ6IGludCA9IFRJTUVPVVRfU0VDT05EUykgLT4gc3VicHJvY2Vzcy5Db21wbGV0ZWRQcm9jZXNzW3N0cl06CiAgICByZXR1cm4gc3VicHJvY2Vzcy5ydW4oCiAgICAgICAgYXJndiwKICAgICAgICBjd2Q9Uk9PVCwKICAgICAgICB0ZXh0PVRydWUsCiAgICAgICAgZW5jb2Rpbmc9InV0Zi04IiwKICAgICAgICBlcnJvcnM9InJlcGxhY2UiLAogICAgICAgIGNhcHR1cmVfb3V0cHV0PVRydWUsCiAgICAgICAgdGltZW91dD10aW1lb3V0LAogICAgICAgIGVudj17IlBBVEgiOiAiL3Vzci9sb2NhbC9iaW46L3Vzci9iaW46L2JpbiIsICJOT19DT0xPUiI6ICIxIiwgIlRFUk0iOiAiZHVtYiJ9LAogICAgKQoKCmRlZiBtYXRlcmlhbGl6ZV9hcmdzKGFyZ3M6IGxpc3Rbc3RyXSkgLT4gbGlzdFtzdHJdOgogICAgcGF0aHMgPSB7IjIudGVzdC50eHQuemlwIiwgIjMudGVzdC50eHQuemlwIiwgImdlbmVyYXRlZC1wYXNzd29yZHMtbG93ZXJjYXNlLnR4dCJ9CiAgICByZXR1cm4gW3N0cihURVNUX0ZJTEVTIC8gdmFsdWUpIGlmIHZhbHVlIGluIHBhdGhzIGVsc2UgdmFsdWUgZm9yIHZhbHVlIGluIGFyZ3NdCgoKZGVmIG5vcm1hbGl6ZSh0ZXh0OiBzdHIpIC0+IHN0cjoKICAgIHRleHQgPSB0ZXh0LnJlcGxhY2UoIlxyXG4iLCAiXG4iKQogICAgdGV4dCA9IHJlLnN1YihyIlx4MWJcW1swLTk7P10qW0EtWmEtel0iLCAiIiwgdGV4dCkKICAgIHRleHQgPSByZS5zdWIociJUaW1lIGVsYXBzZWQ6IFteXG5dKiIsICJUaW1lIGVsYXBzZWQ6IDxEVVJBVElPTj4iLCB0ZXh0KQogICAgcmV0dXJuICIgIi5qb2luKHRleHQuc3BsaXQoKSkKCgpkZWYgcGFzc3dvcmQodGV4dDogc3RyKSAtPiBzdHIgfCBOb25lOgogICAgbWF0Y2ggPSByZS5zZWFyY2gociIoPzpwYXNzd29yZHxmb3VuZClbXkEtWmEtejAtOV0rKFtBLVphLXowLTlfIUAjJCVeJiouLV0rKSIsIHRleHQsIHJlLkkpCiAgICByZXR1cm4gbWF0Y2guZ3JvdXAoMSkgaWYgbWF0Y2ggZWxzZSBOb25lCgoKZGVmIHNhbWVfYmVoYXZpb3IoYWN0dWFsOiBzdWJwcm9jZXNzLkNvbXBsZXRlZFByb2Nlc3Nbc3RyXSwgZXhwZWN0ZWQ6IHN1YnByb2Nlc3MuQ29tcGxldGVkUHJvY2Vzc1tzdHJdKSAtPiBib29sOgogICAgaWYgYWN0dWFsLnJldHVybmNvZGUgIT0gZXhwZWN0ZWQucmV0dXJuY29kZToKICAgICAgICByZXR1cm4gRmFsc2UKICAgIGlmIGV4cGVjdGVkLnJldHVybmNvZGUgIT0gMDoKICAgICAgICByZXR1cm4gYm9vbChub3JtYWxpemUoYWN0dWFsLnN0ZGVycikgb3Igbm9ybWFsaXplKGFjdHVhbC5zdGRvdXQpKQogICAgd2FudGVkID0gcGFzc3dvcmQoZXhwZWN0ZWQuc3Rkb3V0ICsgIlxuIiArIGV4cGVjdGVkLnN0ZGVycikKICAgIGlmIHdhbnRlZDoKICAgICAgICByZXR1cm4gcGFzc3dvcmQoYWN0dWFsLnN0ZG91dCArICJcbiIgKyBhY3R1YWwuc3RkZXJyKSA9PSB3YW50ZWQKICAgIHJldHVybiBub3JtYWxpemUoYWN0dWFsLnN0ZG91dCkgPT0gbm9ybWFsaXplKGV4cGVjdGVkLnN0ZG91dCkKCgpjaGVja3M6IGxpc3RbdHVwbGVbc3RyLCBib29sLCBzdHJdXSA9IFtdCgoKZGVmIGNoZWNrKG5hbWU6IHN0ciwgcGFzc2VkOiBib29sLCBkZXRhaWw6IHN0ciA9ICIiKSAtPiBOb25lOgogICAgY2hlY2tzLmFwcGVuZCgobmFtZSwgcGFzc2VkLCBkZXRhaWwpKQoKCmNvbXBpbGVfc2NyaXB0ID0gUk9PVCAvICJjb21waWxlLnNoIgpjaGVjaygiY29tcGlsZS5zaCBleGlzdHMiLCBjb21waWxlX3NjcmlwdC5pc19maWxlKCkpCgppZiBjb21waWxlX3NjcmlwdC5pc19maWxlKCk6CiAgICBidWlsdCA9IHJ1bihbInNoIiwgc3RyKGNvbXBpbGVfc2NyaXB0KV0sIHRpbWVvdXQ9MTgwKQogICAgY2hlY2soImNvbXBpbGUuc2ggc3VjY2VlZHMiLCBidWlsdC5yZXR1cm5jb2RlID09IDAsIG5vcm1hbGl6ZShidWlsdC5zdGRlcnIgb3IgYnVpbHQuc3Rkb3V0KSkKZWxzZToKICAgIGNoZWNrKCJjb21waWxlLnNoIHN1Y2NlZWRzIiwgRmFsc2UsICJjb21waWxlLnNoIGlzIG1pc3NpbmciKQoKY2hlY2soImV4ZWN1dGFibGUgZXhpc3RzIiwgRVhFQ1VUQUJMRS5pc19maWxlKCkpCgp0cnk6CiAgICBweV9jb21waWxlLmNvbXBpbGUoc3RyKEVYRUNVVEFCTEUpLCBkb3JhaXNlPVRydWUpCiAgICBjaGVjaygiZXhlY3V0YWJsZSBpcyB2YWxpZCBQeXRob24iLCBUcnVlKQpleGNlcHQgKE9TRXJyb3IsIHB5X2NvbXBpbGUuUHlDb21waWxlRXJyb3IpIGFzIGVycm9yOgogICAgY2hlY2soImV4ZWN1dGFibGUgaXMgdmFsaWQgUHl0aG9uIiwgRmFsc2UsIHN0cihlcnJvcikpCgpjaGVjaygiZnJvemVuIHJlZmVyZW5jZSBiaW5hcnkgaXMgYXZhaWxhYmxlIiwgUkVGRVJFTkNFLmlzX2ZpbGUoKSkKCmlmIEVYRUNVVEFCTEUuaXNfZmlsZSgpOgogICAgaGVscF9yZXN1bHQgPSBydW4oW3N5cy5leGVjdXRhYmxlLCBzdHIoRVhFQ1VUQUJMRSksICItLWhlbHAiXSwgdGltZW91dD0xNSkKZWxzZToKICAgIGhlbHBfcmVzdWx0ID0gc3VicHJvY2Vzcy5Db21wbGV0ZWRQcm9jZXNzKFtdLCAxMjcsICIiLCAibWlzc2luZyBleGVjdXRhYmxlIikKaGVscF90ZXh0ID0gaGVscF9yZXN1bHQuc3Rkb3V0ICsgIlxuIiArIGhlbHBfcmVzdWx0LnN0ZGVycgpjaGVjaygicm9vdCBoZWxwIHN1Y2NlZWRzIiwgaGVscF9yZXN1bHQucmV0dXJuY29kZSA9PSAwLCBub3JtYWxpemUoaGVscF90ZXh0KSkKbWlzc2luZ19vcHRpb25zID0gc29ydGVkKG9wdGlvbiBmb3Igb3B0aW9uIGluIFJFUVVJUkVEX09QVElPTlMgaWYgb3B0aW9uIG5vdCBpbiBoZWxwX3RleHQpCmNoZWNrKCJyb290IGhlbHAgY292ZXJzIHRoZSBmcm96ZW4gQ0xJIiwgbm90IG1pc3Npbmdfb3B0aW9ucywgIiwgIi5qb2luKG1pc3Npbmdfb3B0aW9ucykpCgpmb3IgbmFtZSwgcmF3X2FyZ3MgaW4gQ0FTRVM6CiAgICBhcmdzID0gbWF0ZXJpYWxpemVfYXJncyhyYXdfYXJncykKICAgIHRyeToKICAgICAgICBleHBlY3RlZCA9IHJ1bihbc3RyKFJFRkVSRU5DRSksICphcmdzXSkKICAgICAgICBhY3R1YWwgPSBydW4oW3N5cy5leGVjdXRhYmxlLCBzdHIoRVhFQ1VUQUJMRSksICphcmdzXSkKICAgICAgICBkZXRhaWwgPSBmInN0YXR1cyB7YWN0dWFsLnJldHVybmNvZGV9LCBleHBlY3RlZCB7ZXhwZWN0ZWQucmV0dXJuY29kZX0iCiAgICAgICAgY2hlY2sobmFtZSwgc2FtZV9iZWhhdmlvcihhY3R1YWwsIGV4cGVjdGVkKSwgZGV0YWlsKQogICAgZXhjZXB0IChPU0Vycm9yLCBzdWJwcm9jZXNzLlRpbWVvdXRFeHBpcmVkKSBhcyBlcnJvcjoKICAgICAgICBjaGVjayhuYW1lLCBGYWxzZSwgc3RyKGVycm9yKSkKCmZvciBudW1iZXIsIChuYW1lLCBwYXNzZWQsIGRldGFpbCkgaW4gZW51bWVyYXRlKGNoZWNrcywgMSk6CiAgICBzdWZmaXggPSBmIiAjIHtkZXRhaWx9IiBpZiBkZXRhaWwgYW5kIG5vdCBwYXNzZWQgZWxzZSAiIgogICAgcHJpbnQoZiJ7J29rJyBpZiBwYXNzZWQgZWxzZSAnbm90IG9rJ30ge251bWJlcn0gLSB7bmFtZX17c3VmZml4fSIpCgpwcmludChmIjEuLntsZW4oY2hlY2tzKX0iKQpyYWlzZSBTeXN0ZW1FeGl0KDAgaWYgbGVuKGNoZWNrcykgPT0gMTggYW5kIGFsbChwYXNzZWQgZm9yIF8sIHBhc3NlZCwgXyBpbiBjaGVja3MpIGVsc2UgMSkK
+              path: hb_zip_password_finder_test.py
+              sha256: dcf15e520340f69e4e3435c27b46f5da7b38e35d39ddf53df60df4c9d083c162
+        description: |
+            Rebuild a real Rust command-line application as a behavior-compatible, standard-library Python program. The task exercises source comprehension, binary-format handling, search generation, CLI compatibility, and error behavior. Published baseline runs take about 11 minutes and up to 3M tokens.
+        difficulty: hard
+        fetches:
+            - kind: cargo
+              lockfile: Cargo.lock
+              reason: fetch lockfile-pinned crates for the Rust reference build
+        id: zip-password-finder-python-port
+        language: python
+        prompt: |
+            You are working in zip-password-finder v0.11.1. The current repository is
+            the Rust reference implementation.
+
+            Rebuild this command-line application in Python. Produce a 1:1 functional
+            port of its observable behavior.
+
+            Deliverables:
+            - Add an idempotent compile.sh at the repository root.
+            - compile.sh must create a directly runnable Python file named executable
+              at the repository root.
+            - Use the Python standard library. Do not require package installation.
+            - Preserve the v0.11.1 CLI, including option names, validation, exit status,
+              stdout, and stderr behavior.
+            - Support brute-force, dictionary, and mask attacks.
+            - Support custom mask charsets and --startingPassword.
+            - Support the ZipCrypto and WinZip AES files accepted by the reference.
+            - Keep the implementation portable across Linux and macOS.
+
+            The evaluator runs the same cases against the frozen Rust reference and your
+            Python executable. Do not invoke, wrap, import, or shell out to the Rust
+            implementation or another ZIP password finder. Do not use Docker or the
+            network. Implement the behavior in Python.
+
+            Do not ask questions. Inspect the source and complete the port.
+        repo:
+            base_ref: 7c1a4c93841220fc740ed81d3b97784e450fc6a6
+            gold_ref: ""
+            url: https://github.com/agourlay/zip-password-finder.git
+        requirements:
+            commands:
+                - name: git
+                  purpose: fetch the pinned benchmark source
+                - minimum_version: 1.85.0
+                  name: cargo
+                  purpose: build the Rust edition 2024 reference implementation
+                - name: python3
+                  purpose: run the candidate and differential evaluator
+        schema: hb.task.v1
+        tags:
+            - python
+            - rust
+            - rewrite
+            - cli
+            - zip
+            - endurance
+            - hard
+        title: Rewrite a ZIP password finder from Rust to Python
+        type: rewrite
+arms:
+    - id: muse13-direct-zip-v1
+      mode: personal
+      harness: pi
+      harness_version: 0.85.1
+      provider: meta
+      model: muse-spark-1.3-contributor
+      reasoning: high
+      workflow: baseline
+    - id: sol56-muse13-orchestrated-zip-v1
+      mode: personal
+      local_skill_digests:
+        - fc65aaa43afbd0ce7a8595b5a985dd0115243f0843faa8d7ef2fa7761488780d
+      harness: pi
+      harness_version: 0.85.1
+      provider: openai-codex
+      model: gpt-5.6-sol
+      reasoning: high
+      workflow: sol-supervised-muse-loop-v1
+      plugins:
+        - pi-subagents@0.67.0
+varied_axes:
+    - provider
+    - model
+    - workflow
+    - skills
+    - plugins
+repeats: 3
+seed: 91357
+judge_protocol: scenario-default
+win_rule: callout-title-v1
+budget:
+    max_usd_total: 20
+    max_minutes_per_run: 45

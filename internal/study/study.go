@@ -3,6 +3,7 @@ package study
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"regexp"
 	"slices"
 	"sort"
@@ -47,9 +49,10 @@ type Source struct {
 	Summary string `yaml:"summary,omitempty" json:"summary,omitempty"`
 }
 type Scenario struct {
-	ID     string         `yaml:"id" json:"id"`
-	Digest string         `yaml:"digest,omitempty" json:"digest,omitempty"`
-	Task   map[string]any `yaml:"task,omitempty" json:"task,omitempty"`
+	ID        string         `yaml:"id" json:"id"`
+	Digest    string         `yaml:"digest,omitempty" json:"digest,omitempty"`
+	Task      map[string]any `yaml:"task,omitempty" json:"task,omitempty"`
+	LocalPath string         `yaml:"-" json:"-"`
 }
 type Budget struct {
 	MaxUSDPerRun *float64 `yaml:"max_usd_per_run,omitempty" json:"max_usd_per_run,omitempty"`
@@ -324,7 +327,7 @@ func (m Manifest) Digest() string {
 	return hex.EncodeToString(sum[:])
 }
 
-const MaxPublicTaskBytes = 64 * 1024
+const MaxPublicTaskBytes = 96 * 1024
 
 var (
 	publicTaskIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$`)
@@ -335,7 +338,8 @@ var (
 
 // ValidatePublicTask applies the public hb.task.v1 contract shared with Rails.
 // The task is deliberately repository-backed and excludes environment data,
-// local files, and arbitrary nested extension fields.
+// machine paths, secrets, and arbitrary nested extension fields. Bounded
+// public evaluator artifacts may be embedded by digest.
 func ValidatePublicTask(task map[string]any) error {
 	raw, err := canonicalTaskJSON(task)
 	if err != nil {
@@ -344,7 +348,7 @@ func ValidatePublicTask(task map[string]any) error {
 	if len(raw) > MaxPublicTaskBytes {
 		return fmt.Errorf("exceeds %d bytes", MaxPublicTaskBytes)
 	}
-	allowed := map[string]bool{"schema": true, "id": true, "type": true, "title": true, "description": true, "prompt": true, "language": true, "tags": true, "difficulty": true, "repo": true, "acceptance": true}
+	allowed := map[string]bool{"schema": true, "id": true, "type": true, "title": true, "description": true, "prompt": true, "language": true, "tags": true, "difficulty": true, "repo": true, "acceptance": true, "requirements": true, "fetches": true, "artifacts": true}
 	for key := range task {
 		if !allowed[key] {
 			return fmt.Errorf("unknown field %q", key)
@@ -381,7 +385,16 @@ func ValidatePublicTask(task map[string]any) error {
 	if err := validateTaskRepo(task["repo"]); err != nil {
 		return err
 	}
-	return validateTaskAcceptance(task["acceptance"])
+	if err := validateTaskAcceptance(task["acceptance"]); err != nil {
+		return err
+	}
+	if err := validateTaskRequirements(task["requirements"]); err != nil {
+		return err
+	}
+	if err := validateTaskFetches(task["fetches"]); err != nil {
+		return err
+	}
+	return validateTaskArtifacts(task["artifacts"])
 }
 
 func TaskDigest(task map[string]any) (string, error) {
@@ -521,20 +534,150 @@ func validateTaskAcceptance(value any) error {
 	if !ok {
 		return fmt.Errorf("acceptance must be an object")
 	}
-	allowed := map[string]bool{"setup_commands": true, "test_commands": true, "build_commands": true, "fail_to_pass": true}
+	allowed := map[string]bool{"setup_commands": true, "test_commands": true, "build_commands": true, "fail_to_pass": true, "gold_files": true}
 	for key := range acceptance {
 		if !allowed[key] {
 			return fmt.Errorf("unknown acceptance field %q", key)
 		}
 	}
-	for _, key := range []string{"setup_commands", "test_commands", "build_commands", "fail_to_pass"} {
+	for _, key := range []string{"setup_commands", "test_commands", "build_commands", "fail_to_pass", "gold_files"} {
 		value, present := acceptance[key]
 		if !present {
 			value = []any{}
 		}
-		if err := validateTaskStringList(key, value, 32, 2048, key == "test_commands"); err != nil {
+		maximumBytes := 2048
+		if key == "gold_files" {
+			maximumBytes = 256
+		}
+		if err := validateTaskStringList(key, value, 32, maximumBytes, key == "test_commands"); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateTaskRequirements(value any) error {
+	if value == nil {
+		return nil
+	}
+	requirements, ok := value.(map[string]any)
+	if !ok || len(requirements) != 1 {
+		return fmt.Errorf("requirements must contain only commands")
+	}
+	commands, ok := requirements["commands"].([]any)
+	if !ok || len(commands) > 32 {
+		return fmt.Errorf("requirements.commands must be a bounded array")
+	}
+	for _, raw := range commands {
+		command, ok := raw.(map[string]any)
+		if !ok || len(command) > 3 {
+			return fmt.Errorf("requirement commands must be objects")
+		}
+		for key := range command {
+			if key != "name" && key != "minimum_version" && key != "purpose" {
+				return fmt.Errorf("unknown requirement field %q", key)
+			}
+		}
+		if err := validateTaskText("requirement name", command["name"], 1, 64); err != nil {
+			return err
+		}
+		if err := validateTaskText("requirement purpose", command["purpose"], 1, 512); err != nil {
+			return err
+		}
+		if minimum, present := command["minimum_version"]; present {
+			if err := validateTaskText("requirement minimum_version", minimum, 0, 64); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateTaskFetches(value any) error {
+	if value == nil {
+		return nil
+	}
+	fetches, ok := value.([]any)
+	if !ok || len(fetches) > 16 {
+		return fmt.Errorf("fetches must be a bounded array")
+	}
+	for _, raw := range fetches {
+		fetch, ok := raw.(map[string]any)
+		if !ok || len(fetch) > 4 {
+			return fmt.Errorf("fetches must contain objects")
+		}
+		for key := range fetch {
+			if key != "kind" && key != "lockfile" && key != "source_lockfile" && key != "reason" {
+				return fmt.Errorf("unknown fetch field %q", key)
+			}
+		}
+		kind, _ := fetch["kind"].(string)
+		if kind != "cargo" && kind != "npm" && kind != "uv" && kind != "bundler" {
+			return fmt.Errorf("fetch kind is unsupported")
+		}
+		if err := validateRelativeTaskPath("fetch lockfile", fetch["lockfile"]); err != nil {
+			return err
+		}
+		if source, present := fetch["source_lockfile"]; present {
+			if err := validateRelativeTaskPath("fetch source_lockfile", source); err != nil {
+				return err
+			}
+		}
+		if reason, present := fetch["reason"]; present {
+			if err := validateTaskText("fetch reason", reason, 0, 512); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateTaskArtifacts(value any) error {
+	if value == nil {
+		return nil
+	}
+	artifacts, ok := value.([]any)
+	if !ok || len(artifacts) > 32 {
+		return fmt.Errorf("artifacts must be a bounded array")
+	}
+	for _, raw := range artifacts {
+		artifact, ok := raw.(map[string]any)
+		if !ok || len(artifact) != 3 {
+			return fmt.Errorf("artifacts must contain path, sha256, and content_base64")
+		}
+		for key := range artifact {
+			if key != "path" && key != "sha256" && key != "content_base64" {
+				return fmt.Errorf("unknown artifact field %q", key)
+			}
+		}
+		if err := validateRelativeTaskPath("artifact path", artifact["path"]); err != nil {
+			return err
+		}
+		digest, _ := artifact["sha256"].(string)
+		if len(digest) != 64 {
+			return fmt.Errorf("artifact sha256 is invalid")
+		}
+		content, ok := artifact["content_base64"].(string)
+		decoded, err := base64.StdEncoding.DecodeString(content)
+		if !ok || err != nil || len(decoded) > 64*1024 {
+			return fmt.Errorf("artifact content is invalid or too large")
+		}
+		if localPathPattern.Match(decoded) || secretValuePattern.Match(decoded) {
+			return fmt.Errorf("artifact content contains private path or secret-like data")
+		}
+		sum := sha256.Sum256(decoded)
+		if hex.EncodeToString(sum[:]) != digest {
+			return fmt.Errorf("artifact sha256 does not match content")
+		}
+	}
+	return nil
+}
+
+func validateRelativeTaskPath(key string, value any) error {
+	valuePath, ok := value.(string)
+	clean := path.Clean(valuePath)
+	if !ok || valuePath == "" || len(valuePath) > 256 || strings.HasPrefix(valuePath, "/") || strings.Contains(valuePath, "\\") || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || clean != valuePath || strings.ContainsRune(valuePath, '\x00') {
+		return fmt.Errorf("%s must be a clean relative path", key)
 	}
 	return nil
 }

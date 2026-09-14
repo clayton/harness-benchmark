@@ -161,6 +161,9 @@ func Execute(l paths.Layout, id string, timeout time.Duration) (ExecResult, erro
 		if !completePiLocalCost(&rec.Telemetry, filepath.Join(piHome, "models.json"), profile.Provider, profile.Model) {
 			freezePiPriceSnapshot(&rec.Telemetry, filepath.Join(piHome, "models-store.json"), profile.Provider, profile.Model)
 		}
+		if merged, ok, mergeErr := MergePiSubagentTelemetry(rec.Telemetry, filepath.Join(piHome, "sessions", "subagent-artifacts")); mergeErr == nil && ok {
+			rec.Telemetry = merged
+		}
 	}
 	if !profileChildUsageComplete(profile, rec.Telemetry) {
 		complete := false

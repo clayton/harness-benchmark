@@ -1,0 +1,113 @@
+schema: hb.study.v2
+id: sol-muse-hard-zip-2026-09-13
+question: Does SOL 5.6 supervising iterative Muse Spark 1.3 Contributor subagents complete a hard source-port task more accurately and reliably than Muse Spark 1.3 Contributor working alone?
+comparison_mode: ecological
+scenarios:
+    - id: local:f99a6b5bcda6584b
+      digest: f99a6b5bcda6584bbcca3b26dae3f497076771b6d8a1e054f2d37139ddf8e3ed
+      task:
+        acceptance:
+            build_commands:
+                - sh compile.sh
+            fail_to_pass:
+                - 18 reference-equivalence assertions
+            setup_commands:
+                - cargo build --release --locked --offline
+                - mkdir -p .hbench && cp target/release/zip-password-finder .hbench/zip-password-finder-reference
+                - |-
+                  printf '
+                  .hbench/
+                  ' >> .git/info/exclude
+            test_commands:
+                - python3 hb_zip_password_finder_test.py
+        description: |
+            Rebuild a real Rust command-line application as a behavior-compatible, standard-library Python program. The task exercises source comprehension, binary-format handling, search generation, CLI compatibility, and error behavior. Published baseline runs take about 11 minutes and up to 3M tokens.
+        difficulty: hard
+        id: zip-password-finder-python-port
+        language: python
+        prompt: |
+            You are working in zip-password-finder v0.11.1. The current repository is
+            the Rust reference implementation.
+
+            Rebuild this command-line application in Python. Produce a 1:1 functional
+            port of its observable behavior.
+
+            Deliverables:
+            - Add an idempotent compile.sh at the repository root.
+            - compile.sh must create a directly runnable Python file named executable
+              at the repository root.
+            - Use the Python standard library. Do not require package installation.
+            - Preserve the v0.11.1 CLI, including option names, validation, exit status,
+              stdout, and stderr behavior.
+            - Support brute-force, dictionary, and mask attacks.
+            - Support custom mask charsets and --startingPassword.
+            - Support the ZipCrypto and WinZip AES files accepted by the reference.
+            - Keep the implementation portable across Linux and macOS.
+
+            The evaluator runs the same cases against the frozen Rust reference and your
+            Python executable. Do not invoke, wrap, import, or shell out to the Rust
+            implementation or another ZIP password finder. Do not use Docker or the
+            network. Implement the behavior in Python.
+
+            Do not ask questions. Inspect the source and complete the port.
+        repo:
+            base_ref: 7c1a4c93841220fc740ed81d3b97784e450fc6a6
+            gold_ref: ""
+            url: https://github.com/agourlay/zip-password-finder.git
+        schema: hb.task.v1
+        tags:
+            - python
+            - rust
+            - rewrite
+            - cli
+            - zip
+            - endurance
+            - hard
+        title: Rewrite a ZIP password finder from Rust to Python
+        type: rewrite
+arms:
+    - id: muse13-direct-zip-v1
+      mode: personal
+      harness: pi
+      harness_version: 0.85.1
+      provider: meta
+      model: muse-spark-1.3-contributor
+      reasoning: high
+      workflow: baseline
+      prompt_treatment:
+        role: sole-implementer
+        child_delegation: unavailable
+    - id: sol56-muse13-orchestrated-zip-v1
+      mode: personal
+      local_skill_digests:
+        - fc65aaa43afbd0ce7a8595b5a985dd0115243f0843faa8d7ef2fa7761488780d
+      harness: pi
+      harness_version: 0.85.1
+      provider: openai-codex
+      model: gpt-5.6-sol
+      reasoning: high
+      workflow: sol-supervised-muse-loop-v1
+      plugins:
+        - pi-subagents@0.67.0
+      prompt_treatment:
+        role: supervisor-and-final-reviewer
+        implementation: muse-contributors-only
+        child_model: meta/muse-spark-1.3-contributor
+        child_reasoning: high
+        minimum_read_only_analyses: 2
+        review_loop: until-clean-or-timeout
+varied_axes:
+    - provider
+    - model
+    - workflow
+    - skills
+    - plugins
+    - prompt_treatment
+repeats: 3
+seed: 91356
+judge_protocol: scenario-default
+win_rule: callout-title-v1
+budget:
+    max_usd_total: 10
+    max_tokens_per_run: 10000000
+    max_minutes_per_run: 45

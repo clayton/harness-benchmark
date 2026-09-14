@@ -1,6 +1,9 @@
 package study
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,6 +66,23 @@ func TestPublicTaskRejectsUnknownSecretPathAndOversize(t *testing.T) {
 				t.Fatal("unsafe task was accepted")
 			}
 		})
+	}
+}
+
+func TestPublicTaskAcceptsBoundedEvaluatorArtifactsAndFetches(t *testing.T) {
+	task := validPublicTask()
+	content := []byte("package test\n")
+	sum := sha256.Sum256(content)
+	task["requirements"] = map[string]any{"commands": []any{map[string]any{"name": "go", "minimum_version": "1.25", "purpose": "run tests"}}}
+	task["fetches"] = []any{map[string]any{"kind": "cargo", "lockfile": "Cargo.lock", "reason": "fetch locked crates"}}
+	task["artifacts"] = []any{map[string]any{"path": "tests/evaluator.go", "sha256": hex.EncodeToString(sum[:]), "content_base64": base64.StdEncoding.EncodeToString(content)}}
+	task["acceptance"].(map[string]any)["gold_files"] = []any{"tests/evaluator.go"}
+	if err := ValidatePublicTask(task); err != nil {
+		t.Fatal(err)
+	}
+	task["artifacts"].([]any)[0].(map[string]any)["content_base64"] = base64.StdEncoding.EncodeToString([]byte("changed"))
+	if err := ValidatePublicTask(task); err == nil || !strings.Contains(err.Error(), "sha256") {
+		t.Fatalf("tampered artifact error=%v", err)
 	}
 }
 

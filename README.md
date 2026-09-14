@@ -111,9 +111,13 @@ hbench study report review-study.yaml
 
 Public `hb.study.v2` Studies may use personal profiles, local-skill hashes,
 external adapters, and immutable local `hb.task.v1` scenarios. The generated
-public contract strips machine paths and secrets; hbench keeps any local skill
-path mapping in a mode-0600 sidecar under `hb-out/studies`. Private v1 Studies
-remain supported. Studies freeze the question, scenarios, arms, changed axes,
+public contract strips machine paths and secrets, embeds bounded evaluator
+files and dependency-fetch declarations, and keeps creator-side scenario and
+skill path mappings in a mode-0600 sidecar under `hb-out/studies`. Private v1
+Studies remain supported. A completed private workaround can be converted
+without paid reruns with `hbench study promote PRIVATE.yaml --out PUBLIC.yaml`;
+hbench verifies every original frozen cell and records the source mapping
+before projected evidence can be signed. Studies freeze the question, scenarios, arms, changed axes,
 repeats, seed, judge protocol, and budgets. Study execution is local,
 sequential, resumable, and costs model tokens. A Study dollar threshold is
 checked after each run and

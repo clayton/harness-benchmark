@@ -22,6 +22,7 @@ import (
 
 	"github.com/clayton/harness-benchmark/internal/loop"
 	"github.com/clayton/harness-benchmark/internal/paths"
+	studycontract "github.com/clayton/harness-benchmark/internal/study"
 )
 
 func TestPublisherKeysAreSecureOriginScopedAndValidated(t *testing.T) {
@@ -429,6 +430,55 @@ func TestBuildPayloadPublishesFrozenStudyBinding(t *testing.T) {
 	}
 	if _, err := BuildPayload(l, id); err == nil || !strings.Contains(err.Error(), "public adapter is unsafe") {
 		t.Fatalf("unsafe adapter error=%v", err)
+	}
+}
+
+func TestBuildProjectedPayloadRebindsVerifiedPrivateCellToPublicTask(t *testing.T) {
+	l := paths.New(t.TempDir(), t.TempDir())
+	id := "aabbccddeeff"
+	worktree := l.Worktree(id)
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.Save(l, loop.RunRecord{ID: id, ScenarioID: "private/task.yaml", ConfigID: "arm-a", Status: "completed", Worktree: worktree, Harness: "pi", Model: "model", Judges: []loop.JudgeScore{{Name: "test"}}, CreatedAt: loop.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	var task map[string]any
+	rawTask := `{"schema":"hb.task.v1","id":"task","type":"bugfix","title":"Task","description":"Fix it","prompt":"Fix the regression.","language":"go","tags":["go"],"difficulty":"hard","repo":{"url":"https://github.com/example/repo.git","base_ref":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","gold_ref":""},"acceptance":{"setup_commands":[],"test_commands":["go test ./..."],"build_commands":[],"fail_to_pass":["regression"]}}`
+	if err := json.Unmarshal([]byte(rawTask), &task); err != nil {
+		t.Fatal(err)
+	}
+	taskDigest, err := studycontract.TaskDigest(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	promptDigest := fmt.Sprintf("%x", sha256.Sum256([]byte("Fix the regression.")))[:16]
+	sourceDigest := strings.Repeat("b", 64)
+	snapshot := fmt.Sprintf(`{"prompt_sha256_16":%q,"study":{"id":"private-study","contract_digest":"%s","arm_id":"arm-a","scenario_id":"private/task.yaml","repeat":1,"scenario_digest":"%s"},"config":{"id":"arm-a","harness":"pi","model":"model"}}`, promptDigest, strings.Repeat("a", 64), sourceDigest)
+	if err := os.WriteFile(filepath.Join(l.RunDir(id), "snapshot.json"), []byte(snapshot), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projection := StudyProjection{SourceStudyID: "private-study", SourceContractDigest: strings.Repeat("a", 64), SourceScenarioID: "private/task.yaml", SourceScenarioDigest: sourceDigest, TargetStudyID: "public-study", TargetContractDigest: strings.Repeat("c", 64), TargetScenarioID: "local:" + taskDigest[:16], TargetScenarioDigest: taskDigest, ArmID: "arm-a", Repeat: 1, Task: task}
+	payload, err := BuildProjectedPayload(l, id, projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := payload["run"].(map[string]any)
+	publishedSnapshot := payload["snapshot"].(map[string]any)
+	if run["scenario_id"] != projection.TargetScenarioID || publishedSnapshot["task"].(map[string]any)["prompt"] != "Fix the regression." {
+		t.Fatalf("projected payload=%+v", payload)
+	}
+	binding := publishedSnapshot["study"].(map[string]any)
+	if binding["contract_digest"] != projection.TargetContractDigest || binding["scenario_digest"] != taskDigest {
+		t.Fatalf("projected binding=%+v", binding)
+	}
+	promotion := publishedSnapshot["promotion"].(map[string]any)
+	if promotion["source_contract_digest"] != projection.SourceContractDigest {
+		t.Fatalf("promotion=%+v", promotion)
+	}
+	projection.SourceScenarioDigest = strings.Repeat("d", 64)
+	if _, err := BuildProjectedPayload(l, id, projection); err == nil || !strings.Contains(err.Error(), "source frozen study cell") {
+		t.Fatalf("mismatch error=%v", err)
 	}
 }
 
