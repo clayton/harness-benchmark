@@ -6,13 +6,17 @@ Direct Muse achieved exact evaluator success in 2 of 3 repeats. The
 SOL-supervised Muse workflow achieved exact evaluator success in 1 of 3
 repeats.
 
-This is a private exploratory result from one hard task. It is not published
-Agent Rodeo evidence and does not affect the Rodeo Rating.
+This is exploratory Open Range evidence from one hard task. It is published as
+self-signed evidence, has not been independently replicated, and does not
+affect the Rodeo Rating.
 
 ## Study
 
-- Study ID: `sol-muse-hard-zip-private-v2-2026-09-13`
-- Contract digest: `92f9c80b2bd2e1a91e84bf83c7058d92e8679e2121aae3ed2b7755776dbe8e96`
+- Callout: [direct Muse versus SOL-supervised Muse](https://agentrodeo.dev/callouts/on-the-frozen-zip-password-finder-python-port-task-direct-muse-s-ec8af1)
+- Public Study ID: `sol-muse-hard-zip-public-v2-2026-09-13`
+- Public contract digest: `d7d08b82f63f02ffaa4c73c81374fb5eaa568eaa581f876f9121fbcef0170c02`
+- Verified source Study ID: `sol-muse-hard-zip-private-v2-2026-09-13`
+- Verified source contract digest: `92f9c80b2bd2e1a91e84bf83c7058d92e8679e2121aae3ed2b7755776dbe8e96`
 - Comparison mode: ecological
 - Task: rewrite zip-password-finder v0.11.1 from Rust to standard-library Python
 - Evaluator: 18 reference-equivalence assertions
@@ -45,12 +49,12 @@ Agent Rodeo evidence and does not affect the Rodeo Rating.
 
 | Arm | Repeat | Run | Status | Assertions | Exact success | Wall time | Recovered tokens | Recovered estimated cost |
 | --- | ---: | --- | --- | ---: | --- | ---: | ---: | ---: |
-| Direct Muse | 1 | `7fdc744b1caf` | timeout | 18/18 | yes | 45.0m | 6,999,865 | $0.0796 |
-| Direct Muse | 2 | `d49ff96974ee` | timeout | 1/18 | no | 45.0m | 1,804,496 | $0.0203 |
-| Direct Muse | 3 | `7b64bf6fd559` | timeout | 18/18 | yes | 45.0m | 10,151,881 | $0.0659 |
-| SOL + Muse | 1 | `f44007a930b9` | timeout | 17/18 | no | 45.0m | 9,158,531 | $0.3154 |
-| SOL + Muse | 2 | `93baab1921e6` | completed | 18/18 | yes | 40.4m | 27,605,451 | $1.1907 |
-| SOL + Muse | 3 | `1254d6df087c` | failed | 14/18 | no | 28.3m | 9,856,955 | $2.4896 |
+| Direct Muse | 1 | [`7fdc744b1caf`](https://agentrodeo.dev/runs/52) | timeout | 18/18 | yes | 45.0m | 6,999,865 | $0.0796 |
+| Direct Muse | 2 | [`d49ff96974ee`](https://agentrodeo.dev/runs/49) | timeout | 1/18 | no | 45.0m | 1,804,496 | $0.0203 |
+| Direct Muse | 3 | [`7b64bf6fd559`](https://agentrodeo.dev/runs/51) | timeout | 18/18 | yes | 45.0m | 10,151,881 | $0.0659 |
+| SOL + Muse | 1 | [`f44007a930b9`](https://agentrodeo.dev/runs/48) | timeout | 17/18 | no | 45.0m | 9,158,531 | $0.3154 |
+| SOL + Muse | 2 | [`93baab1921e6`](https://agentrodeo.dev/runs/53) | completed | 18/18 | yes | 40.4m | 27,605,451 | $1.1907 |
+| SOL + Muse | 3 | [`1254d6df087c`](https://agentrodeo.dev/runs/50) | failed | 14/18 | no | 28.3m | 9,856,955 | $2.4896 |
 
 The timeout status and exact evaluator result are separate. Two direct Muse
 runs reached 18/18 before the harness terminated the still-running agent at the
@@ -95,11 +99,11 @@ direct-Muse attempt was interrupted before telemetry was saved. The entire
 exercise therefore has a known lower bound of 67,056,046 tokens, $4.8132, and
 4 hours 34 minutes 34 seconds, plus that unmeasured partial attempt.
 
-These are Pi model-catalog estimates, not billed amounts. The raw hbench run
-payloads did not aggregate child usage, so their orchestrated token and cost
-fields undercount the work. The totals above were recovered from the preserved
-`pi-subagents` metadata. hbench still marks orchestration telemetry incomplete;
-the Study cannot support an official efficiency title.
+These are Pi model-catalog estimates, not billed amounts. The original hbench run payloads did not aggregate child usage. hbench 0.7.2
+recovered the preserved `pi-subagents` metadata before publication, so the
+published token totals include the recorded children. Cost evidence remains
+incomplete because these values are catalog estimates rather than comparable
+billed totals; the Study cannot support an efficiency title.
 
 ## Protocol incidents and exclusions
 
@@ -117,7 +121,7 @@ The private Study fixed those infrastructure conditions before its matrix ran.
 Its first direct-Muse cell was later interrupted by the operator while still
 running. No process or patch remained, so the exact run ID was executed again
 and then judged. This resume overwrote the partial agent log and is a protocol
-irregularity. Keep the result exploratory and private.
+irregularity. Keep the published result exploratory.
 
 Some patches also captured generated `__pycache__` files or an extra local test
 file. The acceptance evaluator did not score output hygiene separately.
@@ -130,5 +134,6 @@ on full evaluator success. SOL orchestration improved partial assertion
 coverage and patch consistency, but two of its three runs stopped short of
 perfect behavior.
 
-A follow-up should fix public-task evaluator sidecars and child-usage telemetry,
-then repeat the comparison on multiple hard tasks before publication.
+The public contract now embeds the bounded evaluator and dependency-fetch
+provenance, and publication includes recovered child usage. Repeat the
+comparison on multiple hard tasks before making broader claims.
